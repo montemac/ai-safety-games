@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "transformer-games"
+version = "0.1.0"
+authors = [
+  { name="montemac", email="m.macdiarmid@gmail.com" },
+]
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+  'transformer-lens @ git+https://github.com/neelnanda-io/TransformerLens.git@v1.2.2'
+]
+
+[project.urls]
+"Homepage" = "https://github.com/montemac/transformer-games"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
