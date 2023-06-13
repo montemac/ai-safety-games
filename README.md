@@ -1,1 +1,1 @@
-# transformer-games
+# ai-safety-games
