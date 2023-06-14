@@ -1,9 +1,9 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
 
 [project]
-name = "transformer-games"
+name = "ai-safety-games"
 version = "0.1.0"
 authors = [
   { name="montemac", email="m.macdiarmid@gmail.com" },
@@ -17,12 +17,11 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-  'transformer-lens @ git+https://github.com/neelnanda-io/TransformerLens.git@v1.2.2'
+  'transformer-lens @ git+https://github.com/neelnanda-io/TransformerLens.git@v1.2.2',
+  'sortedcontainers'
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/montemac/transformer-games"
+"Homepage" = "https://github.com/montemac/ai-safety-games"
 
-[tool.hatch.metadata]
-allow-direct-references = true
 
