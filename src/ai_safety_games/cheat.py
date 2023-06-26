@@ -40,6 +40,7 @@ Implementation notes:
 from dataclasses import dataclass
 from typing import Tuple, List, Optional, Dict, Union
 from warnings import warn
+from copy import deepcopy
 
 from tqdm.auto import tqdm
 from sortedcontainers import SortedList
@@ -61,7 +62,7 @@ class CheatConfig:
     num_players: int = 3
     passing_allowed: bool = True
     allowed_next_ranks: str = "above"
-    history_length: int = 1024
+    history_length: Optional[int] = None
     seed: int = 0
 
 
@@ -141,6 +142,15 @@ class CheatGame:
         # Reset game
         self.reset()
 
+    def _store_state_in_history(self):
+        if (
+            self.config.history_length is not None
+            and len(self.state_history) >= self.config.history_length
+        ):
+            self.state_history.pop(0)
+        if self.config.history_length != 0:
+            self.state_history.append(deepcopy(self.state))
+
     def reset(self, seed: Optional[int] = None) -> StepReturn:
         """Reset the game state."""
         # Initialize state by randomly dealing cards to each player
@@ -173,6 +183,10 @@ class CheatGame:
             num_continuous_passes=0,
             burned_cards=[],
         )
+        # Initalize the state history
+        self.state_history = []
+        self._store_state_in_history()
+
         # Return the current player and their observation
         return self.state.current_player, self._get_current_obs(), None
 
@@ -399,6 +413,9 @@ class CheatGame:
             self.state.current_player = (
                 self.state.current_player + 1
             ) % self.config.num_players
+
+        # Store the new state in the history
+        self._store_state_in_history()
 
         # Return the next player, their observation, and the winning
         # player if any.
