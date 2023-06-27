@@ -22,16 +22,15 @@ Design notes:
     - Action taken by the last player
 - Full state history is also stored, up to a configurable depth
 - Possible actions are enumerated as:
-    - Deal (always first implicit action of the game)
     - Pass
-    - Call
     - (Claim X, Play Y) for X, Y taking all ranks
+    - (Claim X, Play Y) for X, Y taking all ranks, WITH a call occuring
+      first 
 - Actions are only partially observable, so observed actions are
   enumerated as:
-    - Deal
     - Pass
-    - Call
     - Claim X, for X taking all ranks
+    - Claim X, for X taking all ranks, plus a call
 
 
 Implementation notes:
@@ -64,6 +63,7 @@ class CheatConfig:
     allowed_next_ranks: str = "above"
     history_length: Optional[int] = None
     seed: int = 0
+    verbose: bool = False
 
 
 @dataclass(order=True)
@@ -108,32 +108,63 @@ class CheatState:
 class CheatGame:
     """Class defining a game of Cheat"""
 
+    @staticmethod
+    def get_fields_from_play_card_action(
+        action_s: str,
+    ) -> Tuple[int, int, bool]:
+        """Get the claimed and played ranks, and the call status, from a
+        play card action string"""
+        fields = action_s.split("_")
+        claimed_rank = int(fields[0][1:])
+        played_rank = int(fields[1][1:])
+        is_call = len(fields) > 2 and fields[2] == "call"
+        return claimed_rank, played_rank, is_call
+
+    @staticmethod
+    def get_play_card_action_from_fields(
+        claimed_rank: int, played_rank: Optional[int], is_call: bool
+    ) -> str:
+        """Get the action string from the claimed and played ranks, and
+        the call status"""
+        action_s = f"c{claimed_rank:02d}"
+        if played_rank is not None:
+            action_s += f"_p{played_rank:02d}"
+        if is_call:
+            action_s += "_call"
+        return action_s
+
     def __init__(self, config: Optional[CheatConfig] = None):
         """Initialize the game with a specified configuration"""
         # Init members
         if config == None:
             config = CheatConfig()
         self.config = config
-        # Create action meanings
+        # Create action meanings lists
+        action_meanings_list = ["pass"]
+        obs_action_meanings_list = ["pass"]
+        # Add play actions with and without call
+        for call in [False, True]:
+            for claim_rank in range(self.config.num_ranks):
+                obs_action_meanings_list.append(
+                    self.get_play_card_action_from_fields(
+                        claim_rank, None, call
+                    )
+                )
+                for play_rank in range(self.config.num_ranks):
+                    action_meanings_list.append(
+                        self.get_play_card_action_from_fields(
+                            claim_rank, play_rank, call
+                        )
+                    )
         self.action_meanings = {
-            0: "deal",
-            1: "pass",
-            2: "call",
+            idx: meaning for idx, meaning in enumerate(action_meanings_list)
         }
-        self.obs_action_meanings = self.action_meanings.copy()
-        play_claim_action_offset = max(self.action_meanings.keys()) + 1
-        for claim_rank in range(self.config.num_ranks):
-            self.obs_action_meanings[
-                play_claim_action_offset + claim_rank
-            ] = f"c{claim_rank:02d}"
-            for play_rank in range(self.config.num_ranks):
-                self.action_meanings[
-                    play_claim_action_offset
-                    + claim_rank * self.config.num_ranks
-                    + play_rank
-                ] = f"c{claim_rank:02d}_p{play_rank:02d}"
         self.action_ids = {
             meaning: id for id, meaning in self.action_meanings.items()
+        }
+        self.obs_action_meanings = {
+            idx: meaning
+            for idx, meaning in enumerate(obs_action_meanings_list)
         }
         self.obs_action_ids = {
             meaning: id for id, meaning in self.obs_action_meanings.items()
@@ -177,7 +208,7 @@ class CheatGame:
             hands=[SortedList(hand) for hand in hands],
             pile=[],
             current_player=self.rng.integers(self.config.num_players),
-            prev_player_action=self.action_ids["deal"],
+            prev_player_action=self.action_ids["pass"],
             prev_player_effective_action=self.action_ids["pass"],
             allowed_next_ranks=self.all_ranks,
             num_continuous_passes=0,
@@ -188,32 +219,35 @@ class CheatGame:
         self._store_state_in_history()
 
         # Return the current player and their observation
-        return self.state.current_player, self._get_current_obs(), None
+        return self.state.current_player, self.state_to_obs(self.state), None
 
     def _action_id_to_obs_action_id(self, action: ActionId):
         obs_action_s = self.action_meanings[action].split("_")[0]
         return self.obs_action_ids[obs_action_s]
 
-    def _get_current_obs(self) -> CheatObs:
+    def state_to_obs(self, state: CheatState) -> CheatObs:
         """Make and return an observation for the current player based
-        on the current state."""
+        on the provided state."""
         return CheatObs(
-            cards_in_hand=self.state.hands[self.state.current_player],
+            cards_in_hand=state.hands[state.current_player],
             num_in_other_hands=[
-                len(self.state.hands[idx % self.config.num_players])
+                len(state.hands[idx % len(state.hands)])
                 for idx in range(
-                    self.state.current_player + 1,
-                    self.state.current_player + self.config.num_players,
+                    state.current_player + 1,
+                    state.current_player + len(state.hands),
                 )
             ],
-            num_in_pile=len(self.state.pile),
+            num_in_pile=len(state.pile),
             prev_player_obs_action=self._action_id_to_obs_action_id(
-                self.state.prev_player_effective_action
+                state.prev_player_effective_action
             ),
-            allowed_next_ranks=self.state.allowed_next_ranks,
-            num_continuous_passes=self.state.num_continuous_passes,
-            num_burned_cards=len(self.state.burned_cards),
+            allowed_next_ranks=state.allowed_next_ranks,
+            num_continuous_passes=state.num_continuous_passes,
+            num_burned_cards=len(state.burned_cards),
         )
+
+    def get_state_repr(self, states: List[CheatState]) -> np.ndarray:
+        """Convert recent game states to a vector representation."""
 
     @staticmethod
     def cards_to_string(cards):
@@ -273,11 +307,6 @@ class CheatGame:
             self.state.allowed_next_ranks = allowed_next_ranks
 
     @staticmethod
-    def ranks_from_play_card_action(action_s: str) -> Tuple[int, int]:
-        """Get the claimed and played ranks from a play card action string"""
-        return [int(tok[1:]) for tok in action_s.split("_")]
-
-    @staticmethod
     def get_ranks_in_hand(hand: SortedList[Card]):
         """Get the set of ranks in a hand"""
         return set(card.rank for card in hand)
@@ -296,6 +325,11 @@ class CheatGame:
             for player in range(num_players)
         ]
 
+    def _verbose_print(self, *args, **kwargs):
+        """Print if verbose"""
+        if self.config.verbose:
+            print(*args, **kwargs)
+
     def step(self, action: Union[int, str]) -> StepReturn:
         """Take an action on behalf of the current player, update the
         game state, and return the next player index and observation."""
@@ -303,6 +337,7 @@ class CheatGame:
         # the passed action since various kinds of invalid actions are
         # intepreted as passed, and will be stored as such in the last
         # action state variable.
+        self._verbose_print("step")
         if not isinstance(action, int):
             action = self.action_ids[action]
         effective_action = action
@@ -319,52 +354,23 @@ class CheatGame:
             warn(f"Invalid action ID {action} provided, treating as pass.")
             action_s = "pass"
         # Process the possible actions
-        if action_s == "deal":
-            # Deal isn't a real action, just the initial previous
-            # action, so treat it as a pass
-            effective_action = self.action_ids["pass"]
-        elif action_s == "pass":
+        if action_s == "pass":
             # A normal pass
             effective_action = self.action_ids["pass"]
-        elif action_s == "call":
-            prev_action_s = self.action_meanings.get(
-                self.state.prev_player_effective_action, None
-            )
-            if len(self.state.pile) == 0:
-                # Call is treated as pass if the pile is empty
-                effective_action = self.action_ids["pass"]
-            elif prev_action_s in ["deal", "pass", "call"]:
-                # Call is treated as pass if the last action wasn't
-                # playing a card
-                effective_action = self.action_ids["pass"]
-            else:
-                # Otherwise, Call requires a show-down to see if the
-                # previous played card and claimed card match
-                prev_claim, prev_play = self.ranks_from_play_card_action(
-                    prev_action_s
-                )
-                if prev_play == prev_claim:
-                    # The last play WAS NOT a cheat, give the pile to
-                    # the caller
-                    self._give_pile_to_player(self.state.current_player)
-                else:
-                    # The last play WAS a cheat, give the pile to the
-                    # previous player
-                    prev_player = (
-                        self.state.current_player - 1
-                    ) % self.config.num_players
-                    self._give_pile_to_player(prev_player)
-                    action_was_successful_call = True
         else:
-            # Process a played card action by adding the played card to
-            # the pile.  If no card of the specified rank is in the
-            # player's hand, treat this as a pass.
-            claim_rank, play_rank = self.ranks_from_play_card_action(action_s)
+            self._verbose_print(f"  play {action_s}")
+            # This is a play card action, maybe including a call
+            # Get all the fields from the action string
+            (
+                claim_rank,
+                play_rank,
+                is_call,
+            ) = self.get_fields_from_play_card_action(action_s)
             ranks_in_hand = self.get_ranks_in_hand(
                 self.state.hands[self.state.current_player]
             )
-            # Determine the effect of the action
-            if claim_rank not in self.state.allowed_next_ranks:
+            # Catch some nonsensical actions
+            if not is_call and claim_rank not in self.state.allowed_next_ranks:
                 # Nonsensical claim, penalize this by giving the player
                 # the full pile!
                 self._give_pile_to_player(self.state.current_player)
@@ -373,16 +379,66 @@ class CheatGame:
                 # TODO: maybe this should also be penalized
                 effective_action = self.action_ids["pass"]
             else:
-                # Played card is in hand, and claimed rank is allowed,
-                # put it on the pile and update allowed next ranks
-                for card in self.state.hands[self.state.current_player]:
-                    if card.rank == play_rank:
-                        self.state.hands[self.state.current_player].remove(
-                            card
+                self._verbose_print(f"  play okay {action_s}")
+                # Process a call if included in the action
+                if is_call:
+                    self._verbose_print("  call")
+                    # This action is a call, so we need to process it
+                    # Get the previous action string
+                    prev_action_s = self.action_meanings.get(
+                        self.state.prev_player_effective_action, None
+                    )
+                    if len(self.state.pile) == 0 or prev_action_s in ["pass"]:
+                        # Call is ignored if the pile is empty, or if the
+                        # last action was a pass
+                        effective_action = self.action_ids[
+                            self.get_play_card_action_from_fields(
+                                claim_rank, play_rank, False
+                            )
+                        ]
+                    else:
+                        # Otherwise, call requires a show-down to see if the
+                        # previous played card and claimed card match
+                        self._verbose_print("  showdown")
+                        (
+                            prev_claim,
+                            prev_play,
+                            _,
+                        ) = self.get_fields_from_play_card_action(
+                            prev_action_s
                         )
-                        break
-                self.state.pile.append(card)
-                self._set_allowed_next_ranks(claim_rank)
+                        self._verbose_print(
+                            f"  prev ranks: {prev_claim}, {prev_play}"
+                        )
+                        if prev_play == prev_claim:
+                            # The last play WAS NOT a cheat, give the pile to
+                            # the caller
+                            self._verbose_print("  call failed")
+                            self._give_pile_to_player(
+                                self.state.current_player
+                            )
+                        else:
+                            # The last play WAS a cheat, give the pile to the
+                            # previous player
+                            self._verbose_print("  call succeeded")
+                            prev_player = (
+                                self.state.current_player - 1
+                            ) % self.config.num_players
+                            self._give_pile_to_player(prev_player)
+                            action_was_successful_call = True
+                if not is_call or action_was_successful_call:
+                    # We can now play the card if we didn't call, or if
+                    # we called successfully.
+                    # Play the first card in the hand that matches this rank
+                    for card in self.state.hands[self.state.current_player]:
+                        if card.rank == play_rank:
+                            self.state.hands[self.state.current_player].remove(
+                                card
+                            )
+                            break
+                    # Put the card on the pile, and update the allowed next ranks
+                    self.state.pile.append(card)
+                    self._set_allowed_next_ranks(claim_rank)
 
         # Deal with a full round of consecutive passes
         if effective_action == self.action_ids["pass"]:
@@ -407,12 +463,10 @@ class CheatGame:
 
         # Finally, move to the next player and create their observation.
         # The next player is always just the incremented current player,
-        # unless the current player made a successful call, in which
-        # case they get another turn.
-        if not action_was_successful_call:
-            self.state.current_player = (
-                self.state.current_player + 1
-            ) % self.config.num_players
+        # since calls are combined with the next card played if successful.
+        self.state.current_player = (
+            self.state.current_player + 1
+        ) % self.config.num_players
 
         # Store the new state in the history
         self._store_state_in_history()
@@ -421,7 +475,7 @@ class CheatGame:
         # player if any.
         return (
             self.state.current_player,
-            self._get_current_obs(),
+            self.state_to_obs(self.state),
             winning_player,
         )
 
@@ -510,13 +564,38 @@ class RandomCheatPlayer(CheatPlayer):
         if sampled_action == "cheat":
             # Always play the lowest card you have,
             # and always claim the highest rank you can
-            action_s = (
-                f"c{max(obs.allowed_next_ranks):02d}_p{min(ranks_in_hand):02d}"
+            action_s = game.get_play_card_action_from_fields(
+                max(obs.allowed_next_ranks), min(ranks_in_hand), False
             )
         elif sampled_action == "play":
             # Play the lowest rank you can
             rank_to_play = min(allowed_ranks_in_hand)
-            action_s = f"c{rank_to_play:02d}_p{rank_to_play:02d}"
+            action_s = game.get_play_card_action_from_fields(
+                rank_to_play, rank_to_play, False
+            )
+        elif sampled_action == "call":
+            # We need to include a play in our action, so sample again
+            # to decide if we should play or cheat, and act accordingly.
+            play_cheat_probs = self.probs_table["can_play"].loc[
+                ["play", "cheat"]
+            ]
+            play_cheat_probs /= play_cheat_probs.sum()
+            play_or_cheat = self.rng.choice(
+                play_cheat_probs.index, p=play_cheat_probs
+            )
+            if play_or_cheat == "play":
+                # Play the lowest card you have, pile will be clear if
+                # call succeeds
+                rank_to_play = min(ranks_in_hand)
+                action_s = game.get_play_card_action_from_fields(
+                    rank_to_play, rank_to_play, True
+                )
+            else:
+                # Always play the lowest card you have,
+                # and always claim the highest rank you can
+                action_s = game.get_play_card_action_from_fields(
+                    max(obs.allowed_next_ranks), min(ranks_in_hand), True
+                )
         return action_s
 
 

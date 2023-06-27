@@ -1,5 +1,5 @@
 """Test suite for Cheat game objects."""
-
+# %%
 from sortedcontainers import SortedList
 from ai_safety_games import cheat, utils
 from ai_safety_games.cheat import (
@@ -18,65 +18,59 @@ def test_cheat_game():
     )
 
     # Check some stuff
-    assert game.action_meanings == {
-        0: "deal",
-        1: "pass",
-        2: "call",
-        3: "c00_p00",
-        4: "c00_p01",
-        5: "c00_p02",
-        6: "c00_p03",
-        7: "c01_p00",
-        8: "c01_p01",
-        9: "c01_p02",
-        10: "c01_p03",
-        11: "c02_p00",
-        12: "c02_p01",
-        13: "c02_p02",
-        14: "c02_p03",
-        15: "c03_p00",
-        16: "c03_p01",
-        17: "c03_p02",
-        18: "c03_p03",
+    ASSUMED_ACTION_MEANINGS = {
+        0: "pass",
+        1: "c00_p00",
+        2: "c00_p01",
+        3: "c00_p02",
+        4: "c00_p03",
+        5: "c01_p00",
+        6: "c01_p01",
+        7: "c01_p02",
+        8: "c01_p03",
+        9: "c02_p00",
+        10: "c02_p01",
+        11: "c02_p02",
+        12: "c02_p03",
+        13: "c03_p00",
+        14: "c03_p01",
+        15: "c03_p02",
+        16: "c03_p03",
+        17: "c00_p00_call",
+        18: "c00_p01_call",
+        19: "c00_p02_call",
+        20: "c00_p03_call",
+        21: "c01_p00_call",
+        22: "c01_p01_call",
+        23: "c01_p02_call",
+        24: "c01_p03_call",
+        25: "c02_p00_call",
+        26: "c02_p01_call",
+        27: "c02_p02_call",
+        28: "c02_p03_call",
+        29: "c03_p00_call",
+        30: "c03_p01_call",
+        31: "c03_p02_call",
+        32: "c03_p03_call",
     }
+    assert game.action_meanings == ASSUMED_ACTION_MEANINGS
     assert game.action_ids == {
-        "deal": 0,
-        "pass": 1,
-        "call": 2,
-        "c00_p00": 3,
-        "c00_p01": 4,
-        "c00_p02": 5,
-        "c00_p03": 6,
-        "c01_p00": 7,
-        "c01_p01": 8,
-        "c01_p02": 9,
-        "c01_p03": 10,
-        "c02_p00": 11,
-        "c02_p01": 12,
-        "c02_p02": 13,
-        "c02_p03": 14,
-        "c03_p00": 15,
-        "c03_p01": 16,
-        "c03_p02": 17,
-        "c03_p03": 18,
+        value: key for key, value in ASSUMED_ACTION_MEANINGS.items()
     }
+    ASSUMED_OBS_ACTION_MEANINGS = {
+        0: "pass",
+        1: "c00",
+        2: "c01",
+        3: "c02",
+        4: "c03",
+        5: "c00_call",
+        6: "c01_call",
+        7: "c02_call",
+        8: "c03_call",
+    }
+    assert game.obs_action_meanings == ASSUMED_OBS_ACTION_MEANINGS
     assert game.obs_action_ids == {
-        "deal": 0,
-        "pass": 1,
-        "call": 2,
-        "c00": 3,
-        "c01": 4,
-        "c02": 5,
-        "c03": 6,
-    }
-    assert game.obs_action_meanings == {
-        0: "deal",
-        1: "pass",
-        2: "call",
-        3: "c00",
-        4: "c01",
-        5: "c02",
-        6: "c03",
+        value: key for key, value in ASSUMED_OBS_ACTION_MEANINGS.items()
     }
     assert game.cards_to_string([Card(2, 3), Card(0, 0)]) == "2|3, 0|0"
 
@@ -104,7 +98,7 @@ def test_cheat_game():
         pile=[],
         current_player=2,
         prev_player_action=0,
-        prev_player_effective_action=1,
+        prev_player_effective_action=0,
         allowed_next_ranks=SortedList([0, 1, 2, 3]),
         num_continuous_passes=0,
         burned_cards=[],
@@ -119,7 +113,7 @@ def test_cheat_game():
         ),
         num_in_other_hands=[3, 2],
         num_in_pile=0,
-        prev_player_obs_action=1,
+        prev_player_obs_action=0,
         allowed_next_ranks=SortedList([0, 1, 2, 3]),
         num_continuous_passes=0,
         num_burned_cards=0,
@@ -140,8 +134,8 @@ def test_cheat_game():
         ],
         pile=[Card(rank=1, suit=0)],
         current_player=0,
-        prev_player_action=8,
-        prev_player_effective_action=8,
+        prev_player_action=6,
+        prev_player_effective_action=6,
         allowed_next_ranks=SortedList([2]),
         num_continuous_passes=0,
         burned_cards=[],
@@ -152,13 +146,13 @@ def test_cheat_game():
         ),
         num_in_other_hands=[2, 2],
         num_in_pile=1,
-        prev_player_obs_action=4,
+        prev_player_obs_action=2,
         allowed_next_ranks=SortedList([2]),
         num_continuous_passes=0,
         num_burned_cards=0,
     )
     # Player 0 calls, has to pick up the card
-    current_player, obs, winning_player = game.step("call")
+    current_player, obs, winning_player = game.step("c00_p00_call")
     assert game.state == CheatState(
         hands=[
             SortedList(
@@ -174,8 +168,8 @@ def test_cheat_game():
         ],
         pile=[],
         current_player=1,
-        prev_player_action=2,
-        prev_player_effective_action=2,
+        prev_player_action=17,
+        prev_player_effective_action=17,
         allowed_next_ranks=SortedList([0, 1, 2, 3]),
         num_continuous_passes=0,
         burned_cards=[],
@@ -184,7 +178,7 @@ def test_cheat_game():
         cards_in_hand=SortedList([Card(rank=0, suit=0), Card(rank=3, suit=0)]),
         num_in_other_hands=[2, 4],
         num_in_pile=0,
-        prev_player_obs_action=2,
+        prev_player_obs_action=1,
         allowed_next_ranks=SortedList([0, 1, 2, 3]),
         num_continuous_passes=0,
         num_burned_cards=0,
@@ -206,8 +200,8 @@ def test_cheat_game():
         ],
         pile=[Card(rank=0, suit=0)],
         current_player=2,
-        prev_player_action=15,
-        prev_player_effective_action=15,
+        prev_player_action=13,
+        prev_player_effective_action=13,
         allowed_next_ranks=SortedList([0]),
         num_continuous_passes=0,
         burned_cards=[],
@@ -216,45 +210,13 @@ def test_cheat_game():
         cards_in_hand=SortedList([Card(rank=2, suit=0), Card(rank=2, suit=1)]),
         num_in_other_hands=[4, 1],
         num_in_pile=1,
-        prev_player_obs_action=6,
+        prev_player_obs_action=4,
         allowed_next_ranks=SortedList([0]),
         num_continuous_passes=0,
         num_burned_cards=0,
     )
-    # Player 2 calls, successfully
-    current_player, obs, winning_player = game.step("call")
-    assert game.state == CheatState(
-        hands=[
-            SortedList(
-                [
-                    Card(rank=0, suit=1),
-                    Card(rank=1, suit=0),
-                    Card(rank=1, suit=1),
-                    Card(rank=3, suit=1),
-                ]
-            ),
-            SortedList([Card(rank=0, suit=0), Card(rank=3, suit=0)]),
-            SortedList([Card(rank=2, suit=0), Card(rank=2, suit=1)]),
-        ],
-        pile=[],
-        current_player=2,
-        prev_player_action=2,
-        prev_player_effective_action=2,
-        allowed_next_ranks=SortedList([0, 1, 2, 3]),
-        num_continuous_passes=0,
-        burned_cards=[],
-    )
-    assert obs == CheatObs(
-        cards_in_hand=SortedList([Card(rank=2, suit=0), Card(rank=2, suit=1)]),
-        num_in_other_hands=[4, 2],
-        num_in_pile=0,
-        prev_player_obs_action=2,
-        allowed_next_ranks=SortedList([0, 1, 2, 3]),
-        num_continuous_passes=0,
-        num_burned_cards=0,
-    )
-    # Player 2 plays a card
-    current_player, obs, winning_player = game.step("c02_p02")
+    # Player 2 calls, successfully, and plays a card
+    current_player, obs, winning_player = game.step("c02_p02_call")
     assert game.state == CheatState(
         hands=[
             SortedList(
@@ -270,8 +232,8 @@ def test_cheat_game():
         ],
         pile=[Card(rank=2, suit=0)],
         current_player=0,
-        prev_player_action=13,
-        prev_player_effective_action=13,
+        prev_player_action=27,
+        prev_player_effective_action=27,
         allowed_next_ranks=SortedList([3]),
         num_continuous_passes=0,
         burned_cards=[],
@@ -287,7 +249,7 @@ def test_cheat_game():
         ),
         num_in_other_hands=[2, 1],
         num_in_pile=1,
-        prev_player_obs_action=5,
+        prev_player_obs_action=3,
         allowed_next_ranks=SortedList([3]),
         num_continuous_passes=0,
         num_burned_cards=0,
@@ -308,8 +270,8 @@ def test_cheat_game():
         ],
         pile=[Card(rank=2, suit=0), Card(rank=3, suit=1)],
         current_player=1,
-        prev_player_action=18,
-        prev_player_effective_action=18,
+        prev_player_action=16,
+        prev_player_effective_action=16,
         allowed_next_ranks=SortedList([0]),
         num_continuous_passes=0,
         burned_cards=[],
@@ -318,7 +280,7 @@ def test_cheat_game():
         cards_in_hand=SortedList([Card(rank=0, suit=0), Card(rank=3, suit=0)]),
         num_in_other_hands=[1, 3],
         num_in_pile=2,
-        prev_player_obs_action=6,
+        prev_player_obs_action=4,
         allowed_next_ranks=SortedList([0]),
         num_continuous_passes=0,
         num_burned_cards=0,
@@ -339,8 +301,8 @@ def test_cheat_game():
         ],
         pile=[Card(rank=2, suit=0), Card(rank=3, suit=1)],
         current_player=2,
-        prev_player_action=1,
-        prev_player_effective_action=1,
+        prev_player_action=0,
+        prev_player_effective_action=0,
         allowed_next_ranks=SortedList([0]),
         num_continuous_passes=1,
         burned_cards=[],
@@ -349,7 +311,7 @@ def test_cheat_game():
         cards_in_hand=SortedList([Card(rank=2, suit=1)]),
         num_in_other_hands=[3, 2],
         num_in_pile=2,
-        prev_player_obs_action=1,
+        prev_player_obs_action=0,
         allowed_next_ranks=SortedList([0]),
         num_continuous_passes=1,
         num_burned_cards=0,
@@ -371,8 +333,8 @@ def test_cheat_game():
         ],
         pile=[],
         current_player=1,
-        prev_player_action=1,
-        prev_player_effective_action=1,
+        prev_player_action=0,
+        prev_player_effective_action=0,
         allowed_next_ranks=SortedList([0, 1, 2, 3]),
         num_continuous_passes=0,
         burned_cards=[Card(rank=2, suit=0), Card(rank=3, suit=1)],
@@ -381,7 +343,7 @@ def test_cheat_game():
         cards_in_hand=SortedList([Card(rank=0, suit=0), Card(rank=3, suit=0)]),
         num_in_other_hands=[1, 3],
         num_in_pile=0,
-        prev_player_obs_action=1,
+        prev_player_obs_action=0,
         allowed_next_ranks=SortedList([0, 1, 2, 3]),
         num_continuous_passes=0,
         num_burned_cards=2,
