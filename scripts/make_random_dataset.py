@@ -6,8 +6,10 @@ import datetime
 import os
 
 from sortedcontainers import SortedList
+from collections import defaultdict
 import numpy as np
 import pandas as pd
+import torch as t
 from tqdm.auto import tqdm
 import plotly.express as px
 
@@ -64,7 +66,18 @@ game = cheat.CheatGame(
 folder = f"../datasets/random_dataset_{datetime.datetime.now().strftime('%Y%m%dT%H%M%S')}"
 os.mkdir(folder)
 
+# Store the game config and player probabilities
+with open(os.path.join(folder, "config.pkl"), "wb") as file:
+    pickle.dump(
+        {
+            "game.config": vars(game.config),
+            "players": [vars(player) for player in players_all],
+        },
+        file,
+    )
+
 # Run the games, storing results of each game as we go
+summary_lists = defaultdict(list)
 for seed in tqdm(range(NUM_GAMES)):
     # Pick the players
     rng = np.random.default_rng(seed=seed)
@@ -78,6 +91,7 @@ for seed in tqdm(range(NUM_GAMES)):
         max_turns=1000,
         seed=seed,
     )
+
     # Store results
     results = {
         "seed": seed,
@@ -87,51 +101,46 @@ for seed in tqdm(range(NUM_GAMES)):
         "scores": {idx: score for idx, score in zip(player_indices, scores)},
         "state_history_list": game.state_history,
     }
-    with open(os.path.join(folder, f"{seed}.pkl"), "wb") as file:
+    with open(os.path.join(folder, f"game_{seed}.pkl"), "wb") as file:
         pickle.dump(results, file)
 
+    # Make reward-state-action sequences for this game
+    rsas_by_player = defaultdict(list)
+    for turn in range(len(game.state_history)):
+        # Get the RSA tuple for this turn
+        player_num, rsa = cheat.get_rsa(
+            states=game.state_history,
+            turn=turn,
+            scores=scores,
+            game=game,
+        )
+        # Store this RSA tuple
+        rsas_by_player[player_num].append(rsa)
 
-# %%
-# Load the results, then process into a dataframe for analysis
-# FN = "random_dataset-20230626T141943.pkl"
-# with open(FN, "rb") as file:
-#     results = pickle.load(file)
+    # Store the RSA sequences in a single set of tensors
+    rsa_tensors = []
+    for idx in range(len(rsas_by_player[0][0])):
+        rsa_tensors.append(
+            t.tensor(
+                np.array(
+                    [
+                        np.array(
+                            [rsa[idx] for rsa in rsas_by_player[player_num]]
+                        )
+                        for player_num in rsas_by_player.keys()
+                    ]
+                ),
+                dtype=t.float32,
+            )
+        )
+    with open(os.path.join(folder, f"rsas_{seed}.pkl"), "wb") as file:
+        pickle.dump(rsa_tensors, file)
 
-# # Probs first
-# player_data = pd.DataFrame(
-#     prob_arrays,
-#     columns=[f"prob-{key[0]}-{key[1]}" for key in PROB_POINTS.keys()],
-# )
+    # Store results useful for summary
+    for key in results:
+        if key not in ["state_history_list"]:
+            summary_lists[key].append(results[key])
 
-# # Games by player
-# player_data["game_count"] = (
-#     pd.Series(np.array(results["players_list"]).flatten())
-#     .value_counts()
-#     .sort_index()
-# )
-
-# # Wins by player, and win rate
-# player_data["win_count"] = (
-#     pd.Series(results["winning_player_list"]).value_counts().sort_index()
-# )
-# player_data["win_rate"] = player_data["win_count"] / player_data["game_count"]
-
-# # Group by each probability, and average the win rate, then concatentate
-# # into a single dataframe
-# win_rates_list = []
-# for key in PROB_POINTS.keys():
-#     col_name = f"prob-{key[0]}-{key[1]}"
-#     win_rate_this = (
-#         player_data.groupby(col_name).mean()["win_rate"].reset_index()
-#     ).set_axis(["prob_value", "win_rate"], axis=1)
-#     win_rate_this["prob_key"] = col_name
-#     win_rates_list.append(win_rate_this)
-# win_rates_df = pd.concat(win_rates_list, axis=0, ignore_index=True)
-
-# px.line(
-#     win_rates_df,
-#     x="prob_value",
-#     y="win_rate",
-#     facet_col="prob_key",
-#     facet_col_wrap=4,
-# ).show()
+# Save summary results list
+with open(os.path.join(folder, "summary.pkl"), "wb") as file:
+    pickle.dump(dict(summary_lists), file)

@@ -83,6 +83,7 @@ class CheatObs:
     num_in_other_hands: List[int]
     num_in_pile: int
     prev_player_obs_action: ObsActionId
+    last_claimed_rank: Optional[int]
     allowed_next_ranks: SortedList[int]
     num_continuous_passes: int
     num_burned_cards: int
@@ -100,6 +101,8 @@ class CheatState:
     current_player: int
     prev_player_action: ActionId
     prev_player_effective_action: ActionId
+    prev_player_obs_action: ObsActionId
+    last_claimed_rank: Optional[int]
     allowed_next_ranks: SortedList[int]
     num_continuous_passes: int
     burned_cards: List[Card]
@@ -210,6 +213,8 @@ class CheatGame:
             current_player=self.rng.integers(self.config.num_players),
             prev_player_action=self.action_ids["pass"],
             prev_player_effective_action=self.action_ids["pass"],
+            prev_player_obs_action=self.obs_action_ids["pass"],
+            last_claimed_rank=None,
             allowed_next_ranks=self.all_ranks,
             num_continuous_passes=0,
             burned_cards=[],
@@ -238,16 +243,12 @@ class CheatGame:
                 )
             ],
             num_in_pile=len(state.pile),
-            prev_player_obs_action=self._action_id_to_obs_action_id(
-                state.prev_player_effective_action
-            ),
+            prev_player_obs_action=state.prev_player_obs_action,
+            last_claimed_rank=state.last_claimed_rank,
             allowed_next_ranks=state.allowed_next_ranks,
             num_continuous_passes=state.num_continuous_passes,
             num_burned_cards=len(state.burned_cards),
         )
-
-    def get_state_repr(self, states: List[CheatState]) -> np.ndarray:
-        """Convert recent game states to a vector representation."""
 
     @staticmethod
     def cards_to_string(cards):
@@ -269,6 +270,7 @@ class CheatGame:
             f"prev action: {self.action_meanings[self.state.prev_player_effective_action]}"
             + f" ({self.action_meanings[self.state.prev_player_action]})"
         )
+        output.append(f"last claimed rank: {self.state.last_claimed_rank}")
         output.append(f"allowed next ranks: {self.state.allowed_next_ranks}")
         output.append(
             f"num continuous passes: {self.state.num_continuous_passes}"
@@ -287,6 +289,7 @@ class CheatGame:
     def _give_pile_to_player(self, player):
         self.state.hands[player].update(self.state.pile)
         self.state.pile.clear()
+        self.state.last_claimed_rank = None
         self.state.allowed_next_ranks = self.all_ranks
 
     def _set_allowed_next_ranks(self, claimed_rank: Optional[int]):
@@ -312,17 +315,11 @@ class CheatGame:
         return set(card.rank for card in hand)
 
     def get_player_scores(self) -> List[int]:
-        """Return the scores of each player.  The score is the
-        difference between the average number of cards in each player's
-        hand, and the number of cards in that player's hand."""
-        num_players = self.config.num_players
-        num_cards_in_hands = [
-            len(self.state.hands[player]) for player in range(num_players)
-        ]
-        avg_num_cards_in_hands = sum(num_cards_in_hands) / num_players
+        """Return the scores of each player.  The score is just the
+        noegativef the number of cards in the player's hand."""
         return [
-            avg_num_cards_in_hands - num_cards_in_hands[player]
-            for player in range(num_players)
+            -len(self.state.hands[player])
+            for player in range(self.config.num_players)
         ]
 
     def _verbose_print(self, *args, **kwargs):
@@ -438,6 +435,7 @@ class CheatGame:
                             break
                     # Put the card on the pile, and update the allowed next ranks
                     self.state.pile.append(card)
+                    self.state.last_claimed_rank = claim_rank
                     self._set_allowed_next_ranks(claim_rank)
 
         # Deal with a full round of consecutive passes
@@ -447,8 +445,10 @@ class CheatGame:
             self.state.num_continuous_passes = 0
         if self.state.num_continuous_passes == self.config.num_players:
             # A full round of consecutive passes, clear the pile
+            # TODO: put pile clearing code into a function
             self.state.burned_cards.extend(self.state.pile)
             self.state.pile.clear()
+            self.state.last_claimed_rank = None
             self.state.allowed_next_ranks = self.all_ranks
             self.state.num_continuous_passes = 0
 
@@ -460,6 +460,9 @@ class CheatGame:
         # Update the previous action state variables
         self.state.prev_player_action = action
         self.state.prev_player_effective_action = effective_action
+        self.state.prev_player_obs_action = self._action_id_to_obs_action_id(
+            effective_action
+        )
 
         # Finally, move to the next player and create their observation.
         # The next player is always just the incremented current player,
@@ -606,6 +609,7 @@ def run(
     verbose: bool = False,
     show_progress: bool = False,
     seed: Optional[int] = None,
+    equal_turns: bool = True,
 ):
     """Run a cheat game to termination, with an optional max number
     of turns (turns, not rounds)."""
@@ -617,7 +621,6 @@ def run(
         player.reset(seed=seed)
 
     # Loop through turns
-    turn_cnt = 0
     for turn_cnt in tqdm(range(max_turns), disable=not show_progress):
         if verbose:
             print(f"{turn_cnt} -----------------------------------")
@@ -632,6 +635,12 @@ def run(
         if winning_player is not None:
             break
 
+    # Take extra dummy turns if needed to get equal number of turns for
+    # all players, if specified
+    if equal_turns:
+        while (len(game.state_history) % game.config.num_players) != 0:
+            _ = game.step("pass")
+
     scores = game.get_player_scores()
     if verbose:
         print("DONE -----------------------------------")
@@ -639,3 +648,66 @@ def run(
         if winning_player is not None:
             print(f"Player {winning_player} won by discarding all cards!")
     return scores, winning_player, turn_cnt
+
+
+def get_rsa(
+    states: List[CheatState], turn: int, scores: List[float], game: CheatGame
+) -> Tuple[int, Tuple[float, np.ndarray, np.ndarray]]:
+    """Get a reward-to-go, state, action tuple for the specified
+    turn."""
+    # State first
+    state = states[turn]
+    state_repr = []
+    # Cards in hand
+    if len(state.hands[state.current_player]) > 0:
+        state_repr.extend(
+            pd.DataFrame(
+                [vars(card) for card in state.hands[state.current_player]]
+            )
+            .groupby("rank")
+            .count()
+            .reindex(range(game.config.num_ranks), fill_value=0)
+            .values.flatten()
+        )
+    else:
+        state_repr.extend(np.zeros(game.config.num_ranks))
+    # Current claimed card
+    rank_is_claimed_card = np.zeros(game.config.num_ranks)
+    rank_is_claimed_card[state.last_claimed_rank] = 1
+    state_repr.extend(rank_is_claimed_card)
+    # Number of cards in the pile, and burned pile
+    num_cards = game.config.num_ranks * game.config.num_suits
+    state_repr.append(len(state.pile) / num_cards)
+    state_repr.append(len(state.burned_cards) / num_cards)
+    # Other player hand sizes and previous observed
+    # actions, starting with the previous player and
+    # going backwards
+    for player_offset in range(-1, -game.config.num_players, -1):
+        other_player_num = (
+            state.current_player + player_offset
+        ) % game.config.num_players
+        # Number of cards in hand
+        state_repr.append(len(state.hands[other_player_num]) / num_cards)
+        # Previous observed action, if any, one-hot encoded
+        # We'll be checking the previous action element
+        # of the state history, so we need to offset by 1
+        turn_to_check = turn + player_offset + 1
+        prev_action = np.zeros(len(game.obs_action_meanings))
+        if turn_to_check >= 0:
+            prev_action[states[turn_to_check].prev_player_obs_action] = 1
+        state_repr.extend(prev_action)
+    # Now this players actual action, one-hot encoded,
+    # if it would affect the game (no action if
+    # the game is over and this is the last state)
+    player_action = np.zeros(len(game.action_meanings))
+    if (turn + 1) < len(states):
+        player_action[states[turn + 1].prev_player_action] = 1
+    # Now the reward-to-go, which is this player's score
+    # for the game
+    player_score = scores[state.current_player]
+    # Store this RSA tuple
+    return state.current_player, (
+        player_score,
+        np.array(state_repr),
+        player_action,
+    )
