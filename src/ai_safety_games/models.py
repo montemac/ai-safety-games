@@ -352,6 +352,10 @@ class DecisionTransformer(HookedTransformer):
         but modifies some arguments, and does the RSA embedding
         first, passing in the embedded inputs tensors in place of the
         usual tokens tensor."""
+        assert (
+            rtgs.shape[1] + states.shape[1] + actions.shape[1]
+            <= self.cfg.n_ctx
+        ), "Input sequence too long!"
         # Embed the RSA inputs
         rsa_embeddings = self.rsa_embed(rtgs, states, actions)
         # Run the HookedTransformer forward pass

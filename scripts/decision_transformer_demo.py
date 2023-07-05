@@ -16,8 +16,14 @@ lt.monkey_patch()
 utils.enable_ipython_reload()
 
 # %%
+# Train!
+
+# Hyperparams
 SEED = 0
 DEVICE = "cuda:0"
+GAME_STEPS = 20
+N_GAMES = 2000
+NUM_EPOCHS = 300
 
 # Initialize a simple test model
 model = models.DecisionTransformer(
@@ -30,7 +36,7 @@ model = models.DecisionTransformer(
         act_fn="relu",
         device=DEVICE,
         seed=SEED,
-        n_timesteps=10,
+        n_timesteps=GAME_STEPS,
         attn_only=True,
     )
 )
@@ -41,8 +47,7 @@ model = models.DecisionTransformer(
 # - Action is either 0 or 1
 # - If the action == XOR(state), then timestep reward is 1, else 0
 # - Games always last for exactly 10 timesteps
-GAME_STEPS = 10
-N_GAMES = 1000
+
 rng = np.random.default_rng(seed=SEED)
 # Initialize the training RSA tensors
 rtgs = torch.zeros((N_GAMES, GAME_STEPS), dtype=torch.float32).to(DEVICE)
@@ -87,8 +92,6 @@ next_actions_correct_test = torch.tensor([0, 1, 1, 0], dtype=torch.int64).to(
 )[:, None]
 
 # Train the model
-NUM_EPOCHS = 200
-
 optimizer = optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
 
 training_results = []
