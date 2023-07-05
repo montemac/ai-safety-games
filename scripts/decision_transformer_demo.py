@@ -31,7 +31,7 @@ NUM_TEST_GAMES = 100
 # Initialize a simple test model
 model = models.DecisionTransformer(
     models.DecisionTransformerConfig(
-        n_layers=2,
+        n_layers=1,
         d_model=64,
         d_head=8,
         d_state=2,
