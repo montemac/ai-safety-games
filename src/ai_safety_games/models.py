@@ -12,8 +12,10 @@
 #    optional?
 # D4. A call to self.setup() is made after these module updates to
 #    rebuild the hook point dict.
-# X5. Overrides self.loss_fn() to calculate loss from the RSA inputs and
-#    the logits (not actually needed, the existing loss_fn() should work)
+# 5. Overrides self.loss_fn() to calculate loss from the RSA inputs and
+#    the logits (needed because we can predict the action at each
+#    timestep, we don't need the index-off-by-one needed when predicting
+#    next tokens.)
 # D6. Overrides various token-related methods to make them do nothing
 # D7. Define a new config class, and map this into the
 #    HookedTransformerConfig class before calling the parent __init__.
@@ -35,6 +37,7 @@ from dataclasses import dataclass, asdict, field, fields
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from jaxtyping import Float, Int
 from einops import rearrange, einsum, repeat
 import numpy as np
@@ -69,16 +72,30 @@ class RSAEmbed(nn.Module):
 
     def forward(
         self,
-        rtgs=Float[torch.Tensor, "batch timestep"],
-        states=Float[torch.Tensor, "batch timestep d_state"],
-        actions=Int[torch.Tensor, "batch timestep"],
+        rtgs=Float[torch.Tensor, "batch timestep_r"],
+        states=Float[torch.Tensor, "batch timestep_s d_state"],
+        actions=Int[torch.Tensor, "batch timestep_a"],
     ) -> Float[torch.Tensor, "batch pos d_model"]:
         """Embed the RSA inputs into the model's latent space. Args `rtgs`
         `states` and `actions` have second dimension of timestep, and
         are emedded into the models latent space, then interleaved so
         that resulting tensor's second dimension is pos, with has length
-        3x timestep length.  Interleaving is always in (RTG, state,
-        action) order."""
+        (timestep_r + timestep_s + timestep_a).  Interleaving is always
+        in (RTG, state, action) order. The final timestep can be
+        incomplete, i.e. contain either just an RTG, or an RTG and a
+        state."""
+        # Confirm timestep dims are correct
+        assert (
+            rtgs.shape[1] >= states.shape[1]
+            and states.shape[1] >= actions.shape[1]
+        ), "RTG, state, and action timesteps must be in order"
+        assert (
+            states.shape[1] >= rtgs.shape[1] - 1
+            and actions.shape[1] >= rtgs.shape[1] - 1
+        ), (
+            "State and action timesteps must be "
+            + "at least one less than RTG timesteps."
+        )
         # Embed the RTGs
         rtgs_embedded = einsum(
             rtgs,
@@ -89,19 +106,32 @@ class RSAEmbed(nn.Module):
         states_embedded = einsum(
             states,
             self.W_S,
-            "batch timestep d_state, d_state d_model -> batch timestep d_model",
+            "batch timestep d_state, d_state d_model"
+            + " -> batch timestep d_model",
         )
         # Embed the actions, which are passed as ints, which we use to
         # index into the embedding matrix.
-        # If A has shape [a, b] and B has shape [c, d], then A[:, B] has shape [a, c, d]
-        # B acts as a tensor of indices into the second dimension (so
-        # >=0 and <b)
+        # If A has shape [a, b] and B has shape [c, d], then A[:, B] has
+        # shape [a, c, d] B acts as a tensor of indices into the second
+        # dimension (so >=0 and <b)
         actions_embedded = self.W_A[actions, :]
         # Interleave the three tensors
-        return rearrange(
-            [rtgs_embedded, states_embedded, actions_embedded],
-            "d_rsa batch timestep d_model -> batch (timestep d_rsa) d_model",
+        rsa_embedded = torch.zeros(
+            (
+                rtgs.shape[0],
+                rtgs.shape[1] + states.shape[1] + actions.shape[1],
+                self.d_model,
+            )
         )
+        rsa_embedded[:, ::3, :] = rtgs_embedded
+        rsa_embedded[:, 1::3, :] = states_embedded
+        rsa_embedded[:, 2::3, :] = actions_embedded
+        return rsa_embedded
+        # return rearrange(
+        #     [rtgs_embedded, states_embedded, actions_embedded],
+        #     "d_rsa batch timestep d_model"
+        #     + " -> batch (timestep d_rsa) d_model",
+        # )
 
 
 class RSAUnembed(nn.Module):
@@ -131,11 +161,11 @@ class RSAUnembed(nn.Module):
         each timestep."""
         return (
             einsum(
-                "batch timestep d_model, d_model vocab -> batch timestep vocab",
                 residual[
-                    1::3
+                    :, 1::3, :
                 ],  # Position of the first state embedding, then every third position
                 self.W_U,
+                "batch timestep d_model, d_model vocab -> batch timestep vocab",
             )
             + self.b_U
         )
@@ -163,16 +193,15 @@ class RSAPosEmbed(nn.Module):
         Output shape [pos, d_model] - will be broadcast along batch
         dim"""
         assert past_kv_pos_offset == 0, "past_kv_pos_offset not supported"
-        num_timesteps = rsa_embeddings.size(1) // 3
-        num_batch = rsa_embeddings.size(0)
-        timestep_embed = self.W_timestep[
-            :num_timesteps, :
-        ]  # [timesteps, d_model]
+        num_pos = rsa_embeddings.size(1)
+        timestep_indices = (
+            torch.arange(num_pos, device=rsa_embeddings.device) // 3
+        )  # [pos]
+        pos_embed = self.W_timestep[timestep_indices, :]  # [pos, d_model]
         broadcast_pos_embed = repeat(
-            timestep_embed,
-            "timestep d_model -> batch (timestep d_rsa) d_model",
-            batch=num_batch,
-            d_rsa=3,
+            pos_embed,
+            "pos d_model -> batch pos d_model",
+            batch=rsa_embeddings.shape[0],
         )  # [batch, pos, d_model]
         return broadcast_pos_embed.clone()
 
@@ -281,21 +310,30 @@ class DecisionTransformer(HookedTransformer):
         )
         super().__init__(cfg=ht_cfg, move_to_device=move_to_device)
 
-        # Create embedding module
+        self.first_device = utilities.devices.get_device_for_block_index(
+            0, self.cfg
+        )
+        self.last_device = utilities.devices.get_device_for_block_index(
+            self.cfg.n_layers - 1, self.cfg
+        )
+        # Create embedding module, move to correct device
         self.rsa_embed = RSAEmbed(
             self.dt_cfg.d_state, self.dt_cfg.d_action, self.dt_cfg.d_model
-        )
-        self.rsa_embed.to(
-            utilities.devices.get_device_for_block_index(0, self.cfg)
-        )
-        # Override a few modules from the parent class
-        self.embed = nn.Identity()  # Redefine exisiting embed module variable
-        self.unembed = RSAUnembed(self.dt_cfg.d_action, self.dt_cfg.d_model)
+        ).to(self.first_device)
+        # Override a few modules from the parent class, moving to them
+        # to the correct devices
+        self.embed = nn.Identity().to(self.first_device)
         self.pos_embed = RSAPosEmbed(
             self.dt_cfg.n_timesteps, self.dt_cfg.d_model
-        )
-        # TODO: Put the above modules on the correct device!  Same as
-        # the device of those being overridden.
+        ).to(self.first_device)
+        self.unembed = RSAUnembed(
+            self.dt_cfg.d_action, self.dt_cfg.d_model
+        ).to(self.last_device)
+
+        # Redo module initialization now that we've overridden some
+        # (Will re-init all weights, keep that in mind for determinism)
+        if self.cfg.init_weights:
+            self.init_weights()
 
         # Redo setup call
         self.setup()
@@ -324,6 +362,51 @@ class DecisionTransformer(HookedTransformer):
             stop_at_layer=stop_at_layer,
             past_kv_cache=None,
         )
+
+    def loss_fn(
+        self,
+        logits: Float[torch.Tensor, "batch pos d_vocab"],
+        actions: Int[torch.Tensor, "batch pos"],
+        per_token: bool = False,
+    ):
+        """Compute the cross-entropy loss between the next-action logits and actual actions."""
+        if actions.device != logits.device:
+            actions = actions.to(logits.device)
+        log_probs = F.log_softmax(logits, dim=-1)
+        predicted_log_probs = log_probs.gather(
+            dim=-1, index=actions[..., None]
+        )[..., 0]
+        if per_token:
+            return -predicted_log_probs
+        else:
+            return -predicted_log_probs.mean()
+
+    def sample_next_action(
+        self,
+        rtgs=Float[torch.Tensor, "batch timestep"],
+        states=Float[torch.Tensor, "batch timestep d_state"],
+        actions=Int[torch.Tensor, "batch timestep"],
+        top_k: Optional[int] = None,
+        top_p: Optional[float] = None,
+        temperature: float = 1.0,
+    ) -> Int[torch.Tensor, "batch"]:
+        """Do a forward pass and sample the next action. Provided
+        actions tensor must have data for one less timestep than rtgs
+        and states, i.e. the current timestep, for which we want to
+        sample an action conditioned on the previous timesteps and
+        current rtg/state."""
+        # Get logits via a forward pass
+        final_logits = self.forward(rtgs, states, actions)[:, -1, :]
+        # Sample the next action from the logits
+        self.eval()
+        sampled_action = utils.sample_logits(
+            final_logits,
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+        ).to(self.first_device)
+        self.train()
+        return sampled_action
 
     # Code below here is just overriding methods from HookedTransformer
     # that don't work for DecisionTransformer
