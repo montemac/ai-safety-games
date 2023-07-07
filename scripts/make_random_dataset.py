@@ -104,8 +104,8 @@ for seed in tqdm(range(NUM_GAMES)):
     with open(os.path.join(folder, f"game_{seed}.pkl"), "wb") as file:
         pickle.dump(results, file)
 
-    # Make reward-state-action sequences for this game
-    rsas_by_player = defaultdict(list)
+    # Get RSA tuples and current player for every game turn
+    players_and_rsas = []
     for turn in range(len(game.state_history)):
         # Get the RSA tuple for this turn
         player_num, rsa = cheat.get_rsa(
@@ -115,26 +115,53 @@ for seed in tqdm(range(NUM_GAMES)):
             game=game,
         )
         # Store this RSA tuple
-        rsas_by_player[player_num].append(rsa)
+        players_and_rsas.append((player_num, rsa))
 
-    # Store the RSA sequences in a single set of tensors
-    rsa_tensors = []
-    for idx in range(len(rsas_by_player[0][0])):
-        rsa_tensors.append(
-            t.tensor(
-                np.array(
-                    [
-                        np.array(
-                            [rsa[idx] for rsa in rsas_by_player[player_num]]
-                        )
-                        for player_num in rsas_by_player.keys()
-                    ]
-                ),
-                dtype=t.float32,
-            )
-        )
+    # Convert this into batched rtg, state, action tensors with the
+    # batch dim holding current player
+    num_game_rounds = len(game.state_history) // game.config.num_players
+    rtgs_tensor = t.zeros(
+        (game.config.num_players, num_game_rounds), dtype=t.float32
+    )
+    states_tensor = t.zeros(
+        (
+            game.config.num_players,
+            num_game_rounds,
+            len(players_and_rsas[0][1][1]),
+        ),
+        dtype=t.float32,
+    )
+    actions_tensor = t.zeros(
+        (game.config.num_players, num_game_rounds), dtype=t.int16
+    )
+    for turn, (player_num, (rtg, state, action)) in enumerate(
+        players_and_rsas
+    ):
+        round = turn // game.config.num_players
+        rtgs_tensor[player_num, round] = rtg
+        states_tensor[player_num, round] = t.tensor(state, dtype=t.float32)
+        actions_tensor[player_num, round] = action
+
+    # # Store the RSA sequences in a single set of tensors
+    # rtg_tensors = [rsa[0] for rsa in rsas_by_player[player_num]
+    # rsa_tensors = []
+    # for idx in range(len(rsas_by_player[0][0])):
+    #     rsa_tensors.append(
+    #         t.tensor(
+    #             np.array(
+    #                 [
+    #                     np.array(
+    #                         [rsa[idx] for rsa in rsas_by_player[player_num]]
+    #                     )
+    #                     for player_num in rsas_by_player.keys()
+    #                 ]
+    #             ),
+    #             dtype=t.float32,
+    #         )
+    #     )
+
     with open(os.path.join(folder, f"rsas_{seed}.pkl"), "wb") as file:
-        pickle.dump(rsa_tensors, file)
+        pickle.dump((rtgs_tensor, states_tensor, actions_tensor), file)
 
     # Store results useful for summary
     for key in results:

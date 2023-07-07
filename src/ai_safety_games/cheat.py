@@ -652,7 +652,7 @@ def run(
 
 def get_rsa(
     states: List[CheatState], turn: int, scores: List[float], game: CheatGame
-) -> Tuple[int, Tuple[float, np.ndarray, np.ndarray]]:
+) -> Tuple[int, Tuple[float, np.ndarray, int]]:
     """Get a reward-to-go, state, action tuple for the specified
     turn."""
     # State first
@@ -696,12 +696,12 @@ def get_rsa(
         if turn_to_check >= 0:
             prev_action[states[turn_to_check].prev_player_obs_action] = 1
         state_repr.extend(prev_action)
-    # Now this players actual action, one-hot encoded,
-    # if it would affect the game (no action if
-    # the game is over and this is the last state)
-    player_action = np.zeros(len(game.action_meanings))
+    # Now this players actual action, as an integer
+    # Default to pass if the action was the last of the game
     if (turn + 1) < len(states):
-        player_action[states[turn + 1].prev_player_action] = 1
+        player_action = states[turn + 1].prev_player_action
+    else:
+        player_action = game.action_ids["pass"]
     # Now the reward-to-go, which is this player's score
     # for the game
     player_score = scores[state.current_player]
