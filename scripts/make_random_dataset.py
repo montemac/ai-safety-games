@@ -55,7 +55,8 @@ for probs in prob_arrays:
 # Run a large number of games with incrementing seeds, randomly
 # selecting players for each game, and recording the results (winner and
 # scores)
-NUM_GAMES = 10000
+NUM_GAMES = 100000
+MAX_TURNS = 195
 
 # Create the game
 game = cheat.CheatGame(
@@ -88,7 +89,7 @@ for seed in tqdm(range(NUM_GAMES)):
     scores, winning_player, turn_cnt = cheat.run(
         game=game,
         players=players,
-        max_turns=1000,
+        max_turns=MAX_TURNS,
         seed=seed,
     )
 
