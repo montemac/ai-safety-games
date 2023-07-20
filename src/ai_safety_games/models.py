@@ -1,36 +1,36 @@
-# TODO: implement a DecisionTransformer by extending the normal hooked
-# transformer class from TransformerLens, with the following changes:
-# D1. self.embed is overwritten after the parent __init__ call to be
-#    Identity.
-# D2. self.pos_embed is overwritten after the parent __init__ call to
-#    embed the timestep, not the position, i.e. the timestep is the same
-#    for each of the RSA inputs for that timestep.
-# D3. self.unembed is overwritten after the parent __init__ call to
-#    unembeded just the next action prediction (i.e. don't predict the
-#    reward to go and state, since these weren't reported as helping in
-#    the original decision transformer paper).  Maybe this should be
-#    optional?
-# D4. A call to self.setup() is made after these module updates to
-#    rebuild the hook point dict.
-# 5. Overrides self.loss_fn() to calculate loss from the RSA inputs and
-#    the logits (needed because we can predict the action at each
-#    timestep, we don't need the index-off-by-one needed when predicting
-#    next tokens.)
-# D6. Overrides various token-related methods to make them do nothing
-# D7. Define a new config class, and map this into the
-#    HookedTransformerConfig class before calling the parent __init__.
-# D8. Override the forward() method to prevent key-value caching and
-#    remove other irrelevant args (e.g. BOS), and do RSA embedding.
-#    This is needed because the HookedTransformer forward() method can't
-#    take a tuple of inputs, so we need to RSA embed first.
-# D9. Make forward call only ever evaluate logits, because we don't have
-#    tokens in the forward call to use for loss calcs.  Loss calcs must
-#    be done later using the logits.
-#
-# NOTE: inheriting from HookedTransformer is a bit hacky, but seemed
-# like the least broken thing overall!  This is despite the fact that
-# the forward call signature is different.  I think the code reuse makes
-# up for this, but this is a weakly held opinion.
+"""Implement a DecisionTransformer by extending the normal hooked
+transformer class from TransformerLens, with the following changes:
+D1. self.embed is overwritten after the parent __init__ call to be
+   Identity.
+D2. self.pos_embed is overwritten after the parent __init__ call to
+   embed the timestep, not the position, i.e. the timestep is the same
+   for each of the RSA inputs for that timestep.
+D3. self.unembed is overwritten after the parent __init__ call to
+   unembeded just the next action prediction (i.e. don't predict the
+   reward to go and state, since these weren't reported as helping in
+   the original decision transformer paper).  Maybe this should be
+   optional?
+D4. A call to self.setup() is made after these module updates to
+   rebuild the hook point dict.
+5. Overrides self.loss_fn() to calculate loss from the RSA inputs and
+   the logits (needed because we can predict the action at each
+   timestep, we don't need the index-off-by-one needed when predicting
+   next tokens.)
+D6. Overrides various token-related methods to make them do nothing
+D7. Define a new config class, and map this into the
+   HookedTransformerConfig class before calling the parent __init__.
+D8. Override the forward() method to prevent key-value caching and
+   remove other irrelevant args (e.g. BOS), and do RSA embedding.
+   This is needed because the HookedTransformer forward() method can't
+   take a tuple of inputs, so we need to RSA embed first.
+D9. Make forward call only ever evaluate logits, because we don't have
+   tokens in the forward call to use for loss calcs.  Loss calcs must
+   be done later using the logits.
+
+NOTE: inheriting from HookedTransformer is a bit hacky, but seemed
+like the least broken thing overall!  This is despite the fact that
+the forward call signature is different.  I think the code reuse makes
+up for this, but this is a weakly held opinion."""
 
 from typing import List, Union, Optional, Tuple, Dict
 from dataclasses import dataclass, asdict, field, fields
