@@ -25,7 +25,7 @@ utils.enable_ipython_reload()
 
 # %%
 # Load a dataset into memory
-FOLDER = "../datasets/random_dataset_20230628T150122"
+FOLDER = "../datasets/random_dataset_20230707T111903"
 DEVICE = "cuda:0"
 
 # Load config info
@@ -69,22 +69,22 @@ D_ACTION = max([action.max() + 1 for action in action_tensors])
 
 # Hyperparams
 SEED = 0
-GAME_STEPS = 128
-NUM_EPOCHS = 50
+N_TIMESTEPS = 66  # ~200 turns for a 3 player game
+NUM_EPOCHS = 20
 
 # Initialize a simple test model
 model = models.DecisionTransformer(
     models.DecisionTransformerConfig(
-        n_layers=1,
-        d_model=64,
-        d_head=8,
+        n_layers=4,
+        d_model=128,
+        d_head=16,
         d_state=state_tensors[0].shape[-1],
         d_action=D_ACTION,
         act_fn="relu",
         device=DEVICE,
         seed=SEED,
-        n_timesteps=GAME_STEPS,
-        attn_only=True,
+        n_timesteps=N_TIMESTEPS,
+        attn_only=False,
     )
 )
 
@@ -98,9 +98,14 @@ for epoch in tqdm(range(NUM_EPOCHS)):
     # Run on training set
     loss_total = 0
     loss_cnt = 0
-    for batch_idx, (rtgs_batch, states_batch, actions_batch) in enumerate(
-        zip(rewards_tensors, state_tensors, action_tensors)
+    for batch_idx, (rtgs_batch, states_batch, actions_batch) in tqdm(
+        enumerate(zip(rewards_tensors, state_tensors, action_tensors)),
+        total=len(rewards_tensors),
     ):
+        # Skip any games that are too long to fit in the context window
+        if rtgs_batch.shape[1] > N_TIMESTEPS:
+            continue
+
         # Zero the parameter gradients
         optimizer.zero_grad()
 
@@ -132,14 +137,40 @@ for epoch in tqdm(range(NUM_EPOCHS)):
     print(f"Epoch: {epoch}, loss_train: {loss_train}")
 
 training_results = pd.DataFrame(training_results)
+# px.line(
+#     training_results.melt(
+#         id_vars=["epoch"],
+#         value_vars=["loss_train"],  # , "loss_test_1d", "loss_test_games"],
+#     ),
+#     x="epoch",
+#     y="value",
+#     color="variable",
+# ).show()
+
+# Create a timestamped output directory
+output_dir = os.path.join(
+    "cheat_train_output", datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+)
+os.makedirs(output_dir, exist_ok=True)
+
+# Save the model and the training results
+with open(os.path.join(output_dir, "model.pkl"), "wb") as file:
+    pickle.dump(model, file)
+with open(os.path.join(output_dir, "training_results.pkl"), "wb") as file:
+    pickle.dump(training_results, file)
+
+# %%
+# Load results from a previous run
+output_dir = "cheat_train_output/20230710T080356"
+with open(os.path.join(output_dir, "training_results.pkl"), "rb") as file:
+    training_results = pickle.load(file)
+
 px.line(
     training_results.melt(
         id_vars=["epoch"],
-        value_vars=["loss_train"],  # , "loss_test_1d", "loss_test_games"],
+        value_vars=["loss_train"],
     ),
     x="epoch",
     y="value",
     color="variable",
 ).show()
-
-# %%
