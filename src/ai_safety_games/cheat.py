@@ -45,6 +45,9 @@ from tqdm.auto import tqdm
 from sortedcontainers import SortedList
 import numpy as np
 import pandas as pd
+import torch as t
+
+from ai_safety_games import models
 
 
 ActionId = int
@@ -482,6 +485,84 @@ class CheatGame:
             winning_player,
         )
 
+    def get_state_vector(self, turn: int) -> np.ndarray:
+        """Build the state representation for a give turn."""
+        state = self.state_history[turn]
+        state_repr = []
+        # Cards in hand
+        if len(state.hands[state.current_player]) > 0:
+            state_repr.extend(
+                pd.DataFrame(
+                    [vars(card) for card in state.hands[state.current_player]]
+                )
+                .groupby("rank")
+                .count()
+                .reindex(range(self.config.num_ranks), fill_value=0)
+                .values.flatten()
+            )
+        else:
+            state_repr.extend(np.zeros(self.config.num_ranks))
+        # Current claimed card
+        rank_is_claimed_card = np.zeros(self.config.num_ranks)
+        rank_is_claimed_card[state.last_claimed_rank] = 1
+        state_repr.extend(rank_is_claimed_card)
+        # Number of cards in the pile, and burned pile
+        num_cards = self.config.num_ranks * self.config.num_suits
+        state_repr.append(len(state.pile) / num_cards)
+        state_repr.append(len(state.burned_cards) / num_cards)
+        # Other player hand sizes and previous observed
+        # actions, starting with the previous player and
+        # going backwards
+        for player_offset in range(-1, -self.config.num_players, -1):
+            other_player_num = (
+                state.current_player + player_offset
+            ) % self.config.num_players
+            # Number of cards in hand
+            state_repr.append(len(state.hands[other_player_num]) / num_cards)
+            # Previous observed action, if any, one-hot encoded
+            # We'll be checking the previous action element
+            # of the state history, so we need to offset by 1
+            turn_to_check = turn + player_offset + 1
+            prev_action = np.zeros(len(self.obs_action_meanings))
+            if turn_to_check >= 0:
+                prev_action[
+                    self.state_history[turn_to_check].prev_player_obs_action
+                ] = 1
+            state_repr.extend(prev_action)
+        return np.array(state_repr)
+
+    def get_rsa(
+        self,
+        turn: int,
+        scores: List[float],
+    ) -> Tuple[int, Tuple[float, np.ndarray, int]]:
+        """Get a reward-to-go, state, action tuple for the specified
+        turn."""
+        current_player = self.state_history[turn].current_player
+        # Reward-to-go, which is this player's score
+        # for the game
+        player_score = scores[current_player]
+
+        # State representation vector
+        state_vector = self.get_state_vector(turn)
+
+        # Now this players actual action, as an integer
+        # Default to pass if the action was the last of the game
+        if (turn + 1) < len(self.state_history):
+            player_action = self.state_history[turn + 1].prev_player_action
+        else:
+            player_action = self.action_ids["pass"]
+
+        # Return
+        return (
+            current_player,
+            (
+                player_score,
+                state_vector,
+                player_action,
+            ),
+        )
+
 
 class CheatPlayer:
     """Base class for Cheat players."""
@@ -526,6 +607,68 @@ class LiteralCheatPlayer(CheatPlayer):
         action = game.action_ids[self.action_s_list[self.action_idx]]
         self.action_idx += 1
         return action
+
+
+class ModelCheatPlayer(CheatPlayer):
+    """Cheat player that uses a decision transformer model to sample
+    the next action."""
+
+    def __init__(
+        self,
+        model: models.DecisionTransformer,
+        goal_score: float,
+        temperature: float = 1.0,
+        seed: int = 0,
+    ):
+        self.model = model
+        self.goal_score = goal_score
+        self.temperature = temperature
+        self.reset(seed=seed)
+
+    def reset(self, seed: Optional[int] = None):
+        """Resets the player, optionally with a new seed."""
+        if seed is not None:
+            self.rng = np.random.default_rng(seed=seed)
+            t.manual_seed(seed)
+        self.rtgs = t.full(
+            (1, self.model.dt_cfg.n_timesteps),
+            fill_value=self.goal_score,
+            dtype=t.float32,
+            device=self.model.cfg.device,
+        )
+        self.states = t.zeros(
+            (1, self.model.dt_cfg.n_timesteps, self.model.dt_cfg.d_state),
+            dtype=t.float32,
+            device=self.model.cfg.device,
+        )
+        self.actions = t.zeros(
+            (1, self.model.dt_cfg.n_timesteps),
+            dtype=t.int64,
+            device=self.model.cfg.device,
+        )
+        self.timestep = 0
+
+    def step(self, obs: CheatObs, game: CheatGame) -> ActionId:
+        """Create the state vector for the current timestep, update the
+        state tensor, run a forward pass through the model to
+        get a next-action distribution, and sample from that
+        using provided sampling parameters. Add the sampled action to
+        the action tensor, and return the sampled action."""
+        state_vector = game.get_state_vector(len(game.state_history) - 1)
+        self.states[:, self.timestep] = t.from_numpy(state_vector)
+        with t.no_grad():
+            action_logits = self.model(
+                rtgs=self.rtgs[:, : self.timestep + 1],
+                states=self.states[:, : self.timestep + 1, :],
+                actions=self.actions[:, : self.timestep],
+            )
+        dist = t.distributions.Categorical(
+            logits=action_logits[0, self.timestep, :] / self.temperature
+        )
+        action = dist.sample()
+        self.actions[:, self.timestep] = action
+        self.timestep += 1
+        return action.item()
 
 
 class RandomCheatPlayer(CheatPlayer):
@@ -648,66 +791,3 @@ def run(
         if winning_player is not None:
             print(f"Player {winning_player} won by discarding all cards!")
     return scores, winning_player, turn_cnt
-
-
-def get_rsa(
-    states: List[CheatState], turn: int, scores: List[float], game: CheatGame
-) -> Tuple[int, Tuple[float, np.ndarray, int]]:
-    """Get a reward-to-go, state, action tuple for the specified
-    turn."""
-    # State first
-    state = states[turn]
-    state_repr = []
-    # Cards in hand
-    if len(state.hands[state.current_player]) > 0:
-        state_repr.extend(
-            pd.DataFrame(
-                [vars(card) for card in state.hands[state.current_player]]
-            )
-            .groupby("rank")
-            .count()
-            .reindex(range(game.config.num_ranks), fill_value=0)
-            .values.flatten()
-        )
-    else:
-        state_repr.extend(np.zeros(game.config.num_ranks))
-    # Current claimed card
-    rank_is_claimed_card = np.zeros(game.config.num_ranks)
-    rank_is_claimed_card[state.last_claimed_rank] = 1
-    state_repr.extend(rank_is_claimed_card)
-    # Number of cards in the pile, and burned pile
-    num_cards = game.config.num_ranks * game.config.num_suits
-    state_repr.append(len(state.pile) / num_cards)
-    state_repr.append(len(state.burned_cards) / num_cards)
-    # Other player hand sizes and previous observed
-    # actions, starting with the previous player and
-    # going backwards
-    for player_offset in range(-1, -game.config.num_players, -1):
-        other_player_num = (
-            state.current_player + player_offset
-        ) % game.config.num_players
-        # Number of cards in hand
-        state_repr.append(len(state.hands[other_player_num]) / num_cards)
-        # Previous observed action, if any, one-hot encoded
-        # We'll be checking the previous action element
-        # of the state history, so we need to offset by 1
-        turn_to_check = turn + player_offset + 1
-        prev_action = np.zeros(len(game.obs_action_meanings))
-        if turn_to_check >= 0:
-            prev_action[states[turn_to_check].prev_player_obs_action] = 1
-        state_repr.extend(prev_action)
-    # Now this players actual action, as an integer
-    # Default to pass if the action was the last of the game
-    if (turn + 1) < len(states):
-        player_action = states[turn + 1].prev_player_action
-    else:
-        player_action = game.action_ids["pass"]
-    # Now the reward-to-go, which is this player's score
-    # for the game
-    player_score = scores[state.current_player]
-    # Store this RSA tuple
-    return state.current_player, (
-        player_score,
-        np.array(state_repr),
-        player_action,
-    )
