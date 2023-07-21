@@ -162,3 +162,4 @@ cython_debug/
 # Misc
 datasets
 *_output
+*_results

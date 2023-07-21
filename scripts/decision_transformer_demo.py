@@ -36,6 +36,7 @@ DEVICE = "cuda:0"
 GAME_STEPS = 20
 NUM_GAMES = 500000
 NUM_TEST_GAMES = 10000
+NUM_GAMES_TO_KEEP_LOSS = 100
 
 NUM_TRAIN_GAMES = NUM_GAMES - NUM_TEST_GAMES
 
@@ -79,74 +80,125 @@ actions = actions[NUM_TEST_GAMES:]
 
 # %%
 # Create various test setups for evaluating the model
-TESTS = {
-    "final_pos_perms": training.DecisionTransformerTest(
-        data=training.RSATensors(
-            rtgs=t.ones((4, GAME_STEPS), dtype=t.float32).to(DEVICE),
-            states=t.cat(
-                [
-                    t.zeros((4, GAME_STEPS - 1, 2), dtype=t.float32).to(
-                        DEVICE
-                    ),
-                    t.tensor(
-                        [[0, 0], [0, 1], [1, 0], [1, 1]], dtype=t.float32
-                    )[:, None, :].to(DEVICE),
-                ],
-                dim=1,
-            ),
-            actions=t.cat(
-                [
-                    t.ones((4, GAME_STEPS - 1), dtype=t.int64).to(DEVICE),
-                    t.tensor([0, 1, 1, 0], dtype=t.int64).to(DEVICE)[:, None],
-                ],
-                dim=1,
-            ),
-        ),
-        loss_mask=t.arange(GAME_STEPS).to(DEVICE) == (GAME_STEPS - 1),
-        reduction="mean_timestep",
-    ),
-    "perfect_games": training.DecisionTransformerTest(
-        data=training.RSATensors(
-            rtgs=t.arange(GAME_STEPS, 0, -1)
-            .to(DEVICE)
-            .expand([NUM_TEST_GAMES, -1]),
-            states=states_test,
-            actions=t.logical_xor(
-                states_test[:, :, 0], states_test[:, :, 1]
-            ).to(dtype=t.int64),
-        ),
-    ),
-}
+# TESTS = {
+#     "final_pos_perms": training.DecisionTransformerTest(
+#         data=training.RSATensors(
+#             rtgs=t.ones((4, GAME_STEPS), dtype=t.float32).to(DEVICE),
+#             states=t.cat(
+#                 [
+#                     t.zeros((4, GAME_STEPS - 1, 2), dtype=t.float32).to(
+#                         DEVICE
+#                     ),
+#                     t.tensor(
+#                         [[0, 0], [0, 1], [1, 0], [1, 1]], dtype=t.float32
+#                     )[:, None, :].to(DEVICE),
+#                 ],
+#                 dim=1,
+#             ),
+#             actions=t.cat(
+#                 [
+#                     t.ones((4, GAME_STEPS - 1), dtype=t.int64).to(DEVICE),
+#                     t.tensor([0, 1, 1, 0], dtype=t.int64).to(DEVICE)[:, None],
+#                 ],
+#                 dim=1,
+#             ),
+#         ),
+#         loss_mask=t.arange(GAME_STEPS).to(DEVICE) == (GAME_STEPS - 1),
+#         reduction="mean_timestep",
+#     ),
+#     "perfect_games": training.DecisionTransformerTest(
+#         data=training.RSATensors(
+#             rtgs=t.arange(GAME_STEPS, 0, -1)
+#             .to(DEVICE)
+#             .expand([NUM_TEST_GAMES, -1]),
+#             states=states_test,
+#             actions=t.logical_xor(
+#                 states_test[:, :, 0], states_test[:, :, 1]
+#             ).to(dtype=t.int64),
+#         ),
+#     ),
+# }
 
-# # Create a test set of trajectories where the final state varies across all
-# # perms, the final RTG is 1, and the preceeding states are all dummies
-# # (RTG 1, state 0, 0, action 1)
-# with t.no_grad():
-#     # 1D test, at final position
-#     rtgs_1d_test = t.ones((4, GAME_STEPS), dtype=t.float32).to(DEVICE)
-#     states_1d_test = t.zeros((4, GAME_STEPS, 2), dtype=t.float32).to(DEVICE)
-#     states_1d_test[:, -1, :] = t.tensor(
-#         [[0, 0], [0, 1], [1, 0], [1, 1]], dtype=t.float32
-#     ).to(DEVICE)
-#     actions_1d_test = t.ones((4, GAME_STEPS - 1), dtype=t.int64).to(DEVICE)
-#     next_actions_correct_1d_test = t.tensor([0, 1, 1, 0], dtype=t.int64).to(
-#         DEVICE
-#     )[:, None]
+# Create a test set of trajectories where the final state varies across all
+# perms, the final RTG is 1, and the preceeding states are all dummies
+# (RTG 1, state 0, 0, action 1)
+with t.no_grad():
+    # 1D test, at final position
+    rtgs_1d_test = t.ones((4, GAME_STEPS), dtype=t.float32).to(DEVICE)
+    states_1d_test = t.zeros((4, GAME_STEPS, 2), dtype=t.float32).to(DEVICE)
+    states_1d_test[:, -1, :] = t.tensor(
+        [[0, 0], [0, 1], [1, 0], [1, 1]], dtype=t.float32
+    ).to(DEVICE)
+    actions_1d_test = t.ones((4, GAME_STEPS - 1), dtype=t.int64).to(DEVICE)
+    next_actions_correct_1d_test = t.tensor([0, 1, 1, 0], dtype=t.int64).to(
+        DEVICE
+    )[:, None]
 
-#     # Test for correct actions at all positions
-#     rtgs_correct_test = (
-#         t.arange(GAME_STEPS, 0, -1).to(DEVICE).expand([NUM_TEST_GAMES, -1])
-#     )
-#     actions_correct_test = t.logical_xor(
-#         states_test[:NUM_TEST_GAMES, :, 0], states_test[:NUM_TEST_GAMES, :, 1]
-#     ).to(dtype=t.int64)
+    # Test for correct actions at all positions
+    rtgs_correct_test = (
+        t.arange(GAME_STEPS, 0, -1).to(DEVICE).expand([NUM_TEST_GAMES, -1])
+    )
+    actions_correct_test = t.logical_xor(
+        states_test[:NUM_TEST_GAMES, :, 0], states_test[:NUM_TEST_GAMES, :, 1]
+    ).to(dtype=t.int64)
+
+
+# Define test function
+def test_func(
+    model: models.DecisionTransformer,
+    config: training.TrainingConfig,
+    test_idx: int,
+):
+    """Test function for the XOR game. Does 1D "final position" tests,
+    as well as a test for perfect score on random games."""
+    # 1D final position
+    final_logits = model(
+        rtgs=rtgs_1d_test,
+        states=states_1d_test,
+        actions=actions_1d_test,
+    )[:, [-1], :]
+    loss_1d_test = model.loss_fn(
+        logits=final_logits, actions=next_actions_correct_1d_test
+    )
+    # All positions
+    # Get logits for all positions
+    logits = model(
+        rtgs=rtgs_correct_test,
+        states=states_test,
+        actions=actions_correct_test,
+    )
+    # Take argmax over actions to get predicted actions
+    actions_pred = t.argmax(logits, dim=-1)
+    # Calculate mean accuracy for each position
+    accuracy_test = t.mean(
+        (actions_pred == actions_correct_test).float(), dim=0
+    )
+    # Calculate mean loss for each position
+    loss_test_full = model.loss_fn(
+        logits=logits,
+        actions=actions_correct_test,
+        per_token=True,
+    )
+    loss_test = t.mean(
+        loss_test_full,
+        dim=0,
+    )
+    # Store full loss tensors for a small set of test games
+    loss_test_full_keep = loss_test_full[:NUM_GAMES_TO_KEEP_LOSS]
+    # Package them all up and return
+    return {
+        "loss_1d_test": loss_1d_test.item(),
+        "accuracy_test": accuracy_test.detach().cpu().numpy(),
+        "loss_test": loss_test.detach().cpu().numpy(),
+        "loss_test_full_keep": loss_test_full_keep.detach().cpu().numpy(),
+    }
 
 
 # %%
 # Train using library function
 
 # Hyperparams
-TRAINING_MINS = 2
+TRAINING_MINS = 5
 BATCH_SIZE = 1000
 LOG_PERIOD = 50000
 D_MODEL = 64
@@ -186,16 +238,14 @@ results = training.train_decision_transformer(
         states=states,
         actions=actions,
     ),
-    test_data=TESTS,
+    test_func=test_func,
 )
 
 
 # %%
 # Test the model
 model = results.model
-training_results = results.training_results
-test_accuracy_results = results.test_accuracy_results
-test_loss_results = results.test_loss_results
+training_results = results.results
 config = results.config
 
 training_results["num_training_seqs"] = (
@@ -204,9 +254,37 @@ training_results["num_training_seqs"] = (
 
 px.line(training_results, x="num_training_seqs", y="loss_train").show()
 
-px.line(test_loss_results["final_pos_perms"]).show()
+# Put test loss and accuracy over positions and training examples into a
+# single dataframe
+test_perf_by_position = pd.concat(
+    [
+        pd.DataFrame(
+            np.array(training_results[col].to_list()),
+            index=training_results["num_training_seqs"],
+            columns=pd.Series(np.arange(GAME_STEPS), name="timestep"),
+        )
+        for col in ["loss_test", "accuracy_test"]
+    ],
+    axis=1,
+    keys=["loss", "accuracy"],
+    names=["qty"],
+)
 
-# TODO: why are 'final_pos_perms' results so bad?
+plot_df = test_perf_by_position.reset_index().melt(
+    id_vars=["num_training_seqs"]
+)
+plot_df["timestep"] = plot_df["timestep"].astype(int)
+px.scatter(
+    plot_df,
+    x="num_training_seqs",
+    y="value",
+    color="timestep",
+    facet_col="qty",
+    title="Mean test loss/accuracy at positions over training, XOR, perfect RTG",
+).show()
+
+
+# px.line(test_loss_results["final_pos_perms"]).show()
 
 # training_results["num_training_seqs"] = (
 #     np.arange(len(training_results)) * LOG_PERIOD

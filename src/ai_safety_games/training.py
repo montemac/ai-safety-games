@@ -1,12 +1,11 @@
 """Functions for training models."""
 
-from collections import defaultdict
 from dataclasses import dataclass, asdict
 import datetime
 import os
 import pickle
 import time
-from typing import Union, Dict, Optional
+from typing import Union, Dict, Optional, Callable, Any
 
 import numpy as np
 import pandas as pd
@@ -33,7 +32,7 @@ class TrainingConfig:
     lr: float
     # Weight decay
     weight_decay: float
-    # Log period in number of batches
+    # Log period in number of training examples
     log_period: int
     # Random seed, set everywhere
     seed: int
@@ -51,33 +50,24 @@ class RSATensors:
 
 
 @dataclass
-class DecisionTransformerTest:
-    """Fields that define a test set for a decision transformer
-    model."""
-
-    data: RSATensors
-    loss_mask: Optional[Bool[t.Tensor, "timestep"]] = None
-    reduction: str = "mean_all"
-
-
-@dataclass
 class DecisionTransformerTrainingResults:
     """Results from training a decision transformer model."""
 
     config: TrainingConfig
     model: models.DecisionTransformer
-    training_results: pd.DataFrame
-    test_accuracy_results: np.ndarray
-    test_loss_results: np.ndarray
+    results: pd.DataFrame
+
+
+# Type hint for a test function that takes a module, training config,
+# and test index, and returns a dictionary of test results
+TestFunc = Callable[[nn.Module, TrainingConfig, int], Dict[str, Any]]
 
 
 def train_decision_transformer(
     model: models.DecisionTransformer,
     config: TrainingConfig,
     training_data: RSATensors,
-    test_data: Union[
-        DecisionTransformerTest, Dict[str, DecisionTransformerTest]
-    ],
+    test_func: Optional[TestFunc] = None,
 ):
     """Train a decision transformer model given an RSA dataset. Assumes
     that the full dataset can fit in memory at once. Also assumes that
@@ -89,10 +79,6 @@ def train_decision_transformer(
     # Set random seed everywhere
     t.manual_seed(config.seed)
     np.random.seed(config.seed)
-
-    # Make sure test data is a dict
-    if not isinstance(test_data, dict):
-        test_data = {"": test_data}
 
     # Create optimizer and dataloader
     optimizer = optim.AdamW(
@@ -109,8 +95,6 @@ def train_decision_transformer(
 
     # Initialize variables for logging
     training_results = []
-    test_accuracy_results = defaultdict(list)
-    test_loss_results = defaultdict(list)
     start_time = time.time()
     elapsed_mins = 0
     epoch = 0
@@ -145,76 +129,75 @@ def train_decision_transformer(
             # Determine whether to run tests and log results
             since_last_log += rtgs_batch.shape[0]
             if since_last_log >= config.log_period:
-                # Run on test sets
-                with t.no_grad():
-                    for test_name, test in test_data.items():
-                        # Forward pass to get logits
-                        actions = test.data.actions
-                        logits = model(
-                            rtgs=test.data.rtgs,
-                            states=test.data.states,
-                            actions=actions,
-                        )
-                        # Mask out logits and actions for timesteps
-                        # where we don't care about the loss
-                        if test.loss_mask is not None:
-                            logits = logits[:, test.loss_mask, :]
-                            actions = test.data.actions[:, test.loss_mask]
-                        # Take argmax to get predicted actions, and
-                        # calculate accuracy
-                        actions_pred = t.argmax(logits, dim=-1)
-                        accuracy = (actions_pred == actions).float()
-                        # Calcualte loss
-                        loss = model.loss_fn(
-                            logits=logits,
-                            actions=actions,
-                            per_token=True,
-                        )
-                        # Reduce accuracy and loss according to specified method
-                        if test.reduction == "mean_all":
-                            accuracy = t.mean(accuracy)
-                            loss = t.mean(loss)
-                        elif test.reduction == "mean_timestep":
-                            accuracy = t.mean(accuracy, dim=1)
-                            loss = t.mean(loss, dim=1)
-                        elif test.reduction == "mean_batch":
-                            accuracy = t.mean(accuracy, dim=0)
-                            loss = t.mean(loss, dim=0)
-                        # Store results
-                        test_accuracy_results[test_name].append(
-                            accuracy.detach().cpu().numpy()
-                        )
-                        test_loss_results[test_name].append(
-                            loss.detach().cpu().numpy()
-                        )
-
                 # Update training loss
                 loss_train = loss_total / loss_cnt
                 loss_total = 0
                 loss_cnt = 0
 
-                # Store stats
-                training_results.append(
-                    {
-                        "elapsed_time": elapsed_mins,
-                        "epoch": epoch,
-                        "loss_train": loss_train,
-                    }
-                )
+                # Save training results
+                results_this = {
+                    "elapsed_time": elapsed_mins,
+                    "epoch": epoch,
+                    "loss_train": loss_train,
+                }
+
+                # Run test func and save results, if provided
+                if test_func is not None:
+                    with t.no_grad():
+                        test_results = test_func(
+                            model, config, len(training_results)
+                        )
+                        results_this.update(test_results)
+
+                        # for test_name, test in test_data.items():
+                        #     # Forward pass to get logits
+                        #     actions = test.data.actions
+                        #     logits = model(
+                        #         rtgs=test.data.rtgs,
+                        #         states=test.data.states,
+                        #         actions=actions,
+                        #     )
+                        #     # Mask out logits and actions for timesteps
+                        #     # where we don't care about the loss
+                        #     if test.loss_mask is not None:
+                        #         logits = logits[:, test.loss_mask, :]
+                        #         actions = test.data.actions[:, test.loss_mask]
+                        #     # Take argmax to get predicted actions, and
+                        #     # calculate accuracy
+                        #     actions_pred = t.argmax(logits, dim=-1)
+                        #     accuracy = (actions_pred == actions).float()
+                        #     # Calcualte loss
+                        #     loss = model.loss_fn(
+                        #         logits=logits,
+                        #         actions=actions,
+                        #         per_token=True,
+                        #     )
+                        #     # Reduce accuracy and loss according to specified method
+                        #     if test.reduction == "mean_all":
+                        #         accuracy = t.mean(accuracy)
+                        #         loss = t.mean(loss)
+                        #     elif test.reduction == "mean_timestep":
+                        #         accuracy = t.mean(accuracy, dim=1)
+                        #         loss = t.mean(loss, dim=1)
+                        #     elif test.reduction == "mean_batch":
+                        #         accuracy = t.mean(accuracy, dim=0)
+                        #         loss = t.mean(loss, dim=0)
+                        #     # Store results
+                        #     test_accuracy_results[test_name].append(
+                        #         accuracy.detach().cpu().numpy()
+                        #     )
+                        #     test_loss_results[test_name].append(
+                        #         loss.detach().cpu().numpy()
+                        #     )
+
+                # Store results
+                training_results.append(results_this)
 
                 since_last_log = 0
 
         epoch += 1
 
     training_results = pd.DataFrame(training_results)
-    test_accuracy_results = {
-        test_name: np.array(results)
-        for test_name, results in test_accuracy_results.items()
-    }
-    test_loss_results = {
-        test_name: np.array(results)
-        for test_name, results in test_loss_results.items()
-    }
 
     # Create a timestamped output directory
     output_dir = os.path.join(
@@ -227,9 +210,7 @@ def train_decision_transformer(
     final_results = DecisionTransformerTrainingResults(
         config=config,
         model=model,
-        training_results=training_results,
-        test_accuracy_results=test_accuracy_results,
-        test_loss_results=test_loss_results,
+        results=training_results,
     )
 
     # Save the model and the training results in a pickled dictionary
