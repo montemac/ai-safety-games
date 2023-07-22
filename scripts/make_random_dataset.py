@@ -55,7 +55,7 @@ for probs in prob_arrays:
 # Run a large number of games with incrementing seeds, randomly
 # selecting players for each game, and recording the results (winner and
 # scores)
-NUM_GAMES = 100000
+NUM_GAMES = 500000
 MAX_TURNS = 195
 
 # Create the game
@@ -79,9 +79,9 @@ with open(os.path.join(folder, "config.pkl"), "wb") as file:
 
 # Run the games, storing results of each game as we go
 summary_lists = defaultdict(list)
-for seed in tqdm(range(NUM_GAMES)):
+for game_idx in tqdm(range(NUM_GAMES)):
     # Pick the players
-    rng = np.random.default_rng(seed=seed)
+    rng = np.random.default_rng(seed=game_idx)
     player_indices = rng.choice(len(players_all), size=game.config.num_players)
     players = [players_all[idx] for idx in player_indices]
 
@@ -90,30 +90,28 @@ for seed in tqdm(range(NUM_GAMES)):
         game=game,
         players=players,
         max_turns=MAX_TURNS,
-        seed=seed,
+        seed=rng.integers(1e6),
     )
 
     # Store results
     results = {
-        "seed": seed,
+        "game_idx": game_idx,
         "turn_cnt": turn_cnt,
         "player_indices": player_indices,
         "winning_player": player_indices[winning_player],
         "scores": {idx: score for idx, score in zip(player_indices, scores)},
         "state_history_list": game.state_history,
     }
-    with open(os.path.join(folder, f"game_{seed}.pkl"), "wb") as file:
+    with open(os.path.join(folder, f"game_{game_idx}.pkl"), "wb") as file:
         pickle.dump(results, file)
 
     # Get RSA tuples and current player for every game turn
     players_and_rsas = []
     for turn in range(len(game.state_history)):
         # Get the RSA tuple for this turn
-        player_num, rsa = cheat.get_rsa(
-            states=game.state_history,
+        player_num, rsa = game.get_rsa(
             turn=turn,
             scores=scores,
-            game=game,
         )
         # Store this RSA tuple
         players_and_rsas.append((player_num, rsa))
@@ -161,7 +159,7 @@ for seed in tqdm(range(NUM_GAMES)):
     #         )
     #     )
 
-    with open(os.path.join(folder, f"rsas_{seed}.pkl"), "wb") as file:
+    with open(os.path.join(folder, f"rsas_{game_idx}.pkl"), "wb") as file:
         pickle.dump((rtgs_tensor, states_tensor, actions_tensor), file)
 
     # Store results useful for summary

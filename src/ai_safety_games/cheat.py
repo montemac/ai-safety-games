@@ -67,6 +67,7 @@ class CheatConfig:
     history_length: Optional[int] = None
     seed: int = 0
     verbose: bool = False
+    rtg_method: str = "victory_margin"
 
 
 @dataclass(order=True)
@@ -522,6 +523,7 @@ class CheatGame:
             # Previous observed action, if any, one-hot encoded
             # We'll be checking the previous action element
             # of the state history, so we need to offset by 1
+            # TODO: this is clunky, just store an action history
             turn_to_check = turn + player_offset + 1
             prev_action = np.zeros(len(self.obs_action_meanings))
             if turn_to_check >= 0:
@@ -538,16 +540,28 @@ class CheatGame:
     ) -> Tuple[int, Tuple[float, np.ndarray, int]]:
         """Get a reward-to-go, state, action tuple for the specified
         turn."""
+        assert self.config.rtg_method in [
+            "neg_cards",
+            "victory_margin",
+        ], "Invalid rtg_method"
         current_player = self.state_history[turn].current_player
-        # Reward-to-go, which is this player's score
-        # for the game
-        player_score = scores[current_player]
+        # Reward-to-go
+        if self.config.rtg_method == "neg_cards":
+            rtg = scores[current_player]
+        else:
+            best_other_score = max(
+                score
+                for idx, score in enumerate(scores)
+                if idx != current_player
+            )
+            rtg = scores[current_player] - best_other_score
 
         # State representation vector
         state_vector = self.get_state_vector(turn)
 
         # Now this players actual action, as an integer
         # Default to pass if the action was the last of the game
+        # TODO: this is clunky, just store an action history
         if (turn + 1) < len(self.state_history):
             player_action = self.state_history[turn + 1].prev_player_action
         else:
@@ -557,7 +571,7 @@ class CheatGame:
         return (
             current_player,
             (
-                player_score,
+                rtg,
                 state_vector,
                 player_action,
             ),
@@ -616,12 +630,12 @@ class ModelCheatPlayer(CheatPlayer):
     def __init__(
         self,
         model: models.DecisionTransformer,
-        goal_score: float,
+        goal_rtg: float,
         temperature: float = 1.0,
         seed: int = 0,
     ):
         self.model = model
-        self.goal_score = goal_score
+        self.goal_rtg = goal_rtg
         self.temperature = temperature
         self.reset(seed=seed)
 
@@ -632,7 +646,7 @@ class ModelCheatPlayer(CheatPlayer):
             t.manual_seed(seed)
         self.rtgs = t.full(
             (1, self.model.dt_cfg.n_timesteps),
-            fill_value=self.goal_score,
+            fill_value=self.goal_rtg,
             dtype=t.float32,
             device=self.model.cfg.device,
         )
@@ -758,10 +772,10 @@ def run(
     of turns (turns, not rounds)."""
     assert len(players) == game.config.num_players
 
-    # Reset the game and players
+    # Reset the game and players with different seeds if specified
     current_player, obs, winning_player = game.reset(seed=seed)
-    for player in players:
-        player.reset(seed=seed)
+    for player_idx, player in enumerate(players):
+        player.reset(seed=seed if seed is None else seed + player_idx)
 
     # Loop through turns
     for turn_cnt in tqdm(range(max_turns), disable=not show_progress):
