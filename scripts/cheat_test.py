@@ -75,54 +75,61 @@ all_margins = pd.DataFrame(
 )
 mean_margins_by_player = all_margins.groupby("player").mean()
 px.ecdf(mean_margins_by_player, title="CDF of mean margins by player").show()
+px.histogram(
+    all_margins["margin"], title="Histogram of margins in training data"
+).show()
+px.ecdf(all_margins["margin"], title="CDF of all margins").show()
+
 
 # %%
 # Run a bunch of different games with random opponents, see how the
 # model performs
-NUM_TEST_GAMES = 2000
-RTG_RANGE = [-20, 10]
+GAMES_PER_RTG = 100
+GOAL_RTGS = np.arange(-20, 10, 2)
 SEED = 0
 
 # Use this to generate random stuff and sub-seeds for games
 rng = np.random.default_rng(seed=SEED)
 
 results_list = []
-for game_idx in tqdm(range(NUM_TEST_GAMES)):
-    # Randomly choose a goal RTG in the defined range, using a uniform
-    # float distribution
-    goal_rtg = rng.uniform(*RTG_RANGE)
+game_pbar = tqdm(total=GAMES_PER_RTG)
+for goal_rtg in tqdm(GOAL_RTGS):
+    for game_idx in range(GAMES_PER_RTG):
+        # Create a list of players with the model-based player in the first
+        # position, then two other randomly-selected players
+        players = [
+            cheat.ModelCheatPlayer(model=model, goal_rtg=goal_rtg),
+            *rng.choice(players_all, size=2, replace=True),
+        ]
 
-    # Create a list of players with the model-based player in the first
-    # position, then two other randomly-selected players
-    players = [
-        cheat.ModelCheatPlayer(model=model, goal_rtg=goal_rtg),
-        *rng.choice(players_all, size=2, replace=True),
-    ]
-
-    # Create the game
-    game = cheat.CheatGame(
-        config=cheat.CheatConfig(
-            num_ranks=13, num_suits=4, seed=rng.integers(1e6)
+        # Create the game
+        game = cheat.CheatGame(
+            config=cheat.CheatConfig(
+                num_ranks=13, num_suits=4, seed=rng.integers(1e6)
+            )
         )
-    )
 
-    # Run the game
-    scores, winning_player, turn_cnt = cheat.run(
-        game=game,
-        players=players,
-        max_turns=model.dt_cfg.n_timesteps * game.config.num_players,
-        seed=rng.integers(1e6),
-    )
+        # Run the game
+        scores, winning_player, turn_cnt = cheat.run(
+            game=game,
+            players=players,
+            max_turns=model.dt_cfg.n_timesteps * game.config.num_players,
+            seed=rng.integers(1e6),
+        )
 
-    # Calculate victory margins
-    margins = scores_to_margins(scores)
+        # Calculate victory margins
+        margins = scores_to_margins(scores)
 
-    results = {
-        "goal_rtg": goal_rtg,
-        "game_idx": game_idx,
-        "model_margin": margins[0],
-    }
-    results_list.append(results)
+        results = {
+            "goal_rtg": goal_rtg,
+            "game_idx": game_idx,
+            "model_margin": margins[0],
+        }
+        results_list.append(results)
+
+        game_pbar.update(1)
+    game_pbar.reset()
+game_pbar.close()
 
 results_df = pd.DataFrame(results_list)
 
@@ -130,7 +137,7 @@ results_df = pd.DataFrame(results_list)
 # Plot and analyze the results
 
 # Get the margins for individual games for the best K players
-TOP_K = 50
+TOP_K = 10
 best_k_players = mean_margins_by_player.sort_values(
     "margin", ascending=False
 ).index[:TOP_K]
@@ -141,57 +148,58 @@ best_k_margins_all = best_k_margins_all.join(
     rsuffix="_mean",
 )
 
-# Plot scatter of model margin vs. goal RTG, overlay top-K players
-fig = px.scatter(
-    results_df,
-    x="goal_rtg",
-    y="model_margin",
-    opacity=0.2,
-    title="Model victory margin vs goal RTG",
-)
-fig.add_scatter(
-    x=best_k_margins_all["margin_mean"],
-    y=best_k_margins_all["margin"],
-    mode="markers",
-    marker=dict(color="red", opacity=0.01),
-    name="Best K players",
-)
-fig.update_layout(height=600)
-fig.show()
 
-# Show histograms of margin for model in certain RTG range, and for
-# top-K players that span similar mean margins
-rtg_range = (
-    best_k_margins_all["margin_mean"].min(),
-    best_k_margins_all["margin_mean"].max(),
-)
-model_good_margins = results_df["model_margin"][
-    results_df["goal_rtg"].between(*rtg_range)
-]
-top_k_good_margins = best_k_margins_all["margin"]
-plot_margins = (
-    pd.concat(
-        [
-            model_good_margins.rename("margin").to_frame(),
-            top_k_good_margins.to_frame(),
-        ],
-        keys=["model", "top_k"],
-        names=["player"],
-    )
-    .reset_index()
-    .drop("level_1", axis=1)
-)
-fig = px.histogram(
-    plot_margins,
-    x="margin",
-    color="player",
-    histnorm="probability",
-    title='Histogram of "good" margins for RTG-conditioned'
-    " model and top-K players",
-)
-fig.update_layout(barmode="overlay")
-fig.update_traces(opacity=0.75)
-fig.show()
+# # Plot scatter of model margin vs. goal RTG, overlay top-K players
+# fig = px.scatter(
+#     results_df,
+#     x="goal_rtg",
+#     y="model_margin",
+#     opacity=0.2,
+#     title="Model victory margin vs goal RTG",
+# )
+# fig.add_scatter(
+#     x=best_k_margins_all["margin_mean"],
+#     y=best_k_margins_all["margin"],
+#     mode="markers",
+#     marker=dict(color="red", opacity=0.01),
+#     name="Best K players",
+# )
+# fig.update_layout(height=600)
+# fig.show()
+
+# # Show histograms of margin for model in certain RTG range, and for
+# # top-K players that span similar mean margins
+# rtg_range = (
+#     best_k_margins_all["margin_mean"].min(),
+#     best_k_margins_all["margin_mean"].max(),
+# )
+# model_good_margins = results_df["model_margin"][
+#     results_df["goal_rtg"].between(*rtg_range)
+# ]
+# top_k_good_margins = best_k_margins_all["margin"]
+# plot_margins = (
+#     pd.concat(
+#         [
+#             model_good_margins.rename("margin").to_frame(),
+#             top_k_good_margins.to_frame(),
+#         ],
+#         keys=["model", "top_k"],
+#         names=["player"],
+#     )
+#     .reset_index()
+#     .drop("level_1", axis=1)
+# )
+# fig = px.histogram(
+#     plot_margins,
+#     x="margin",
+#     color="player",
+#     histnorm="probability",
+#     title='Histogram of "good" margins for RTG-conditioned'
+#     " model and top-K players",
+# )
+# fig.update_layout(barmode="overlay")
+# fig.update_traces(opacity=0.75)
+# fig.show()
 
 
 # %%
