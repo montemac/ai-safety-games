@@ -46,6 +46,7 @@ from sortedcontainers import SortedList
 import numpy as np
 import pandas as pd
 import torch as t
+from jaxtyping import Int64
 
 from ai_safety_games import models
 
@@ -231,7 +232,11 @@ class CheatGame:
         return self.state.current_player, self.state_to_obs(self.state), None
 
     def _action_id_to_obs_action_id(self, action: ActionId):
-        obs_action_s = self.action_meanings[action].split("_")[0]
+        action_s = self.action_meanings[action]
+        action_s_split = action_s.split("_")
+        obs_action_s = action_s_split[0]
+        if action_s.endswith('call')
+            obs_action_s += '_call'
         return self.obs_action_ids[obs_action_s]
 
     def state_to_obs(self, state: CheatState) -> CheatObs:
@@ -576,6 +581,135 @@ class CheatGame:
                 player_action,
             ),
         )
+
+    def get_token_vocab(self) -> Dict[str, int]:
+        """Build a token vocabulary based on this game's
+        configuration."""
+        # Beginning of game
+        token_strs = ["BOG"]
+        # Tokens for each other player
+        for other_player in range(self.config.num_players - 1):
+            # Other players' observed actions
+            token_strs.extend(
+                [
+                    f"oa_{other_player}_{action_s}"
+                    for action_s in self.obs_action_meanings.values()
+                ]
+            )
+            # Other players' action results
+            token_strs.extend(
+                [
+                    f"ar_{other_player}_{result}"
+                    for result in ["normal", "call_failed", "call_succeeded"]
+                ]
+            )
+        # Current player's hand, one token for each number/rank combo
+        token_strs.extend(
+            [
+                f"hand_{num_cards}x{rank}"
+                for rank in range(self.config.num_ranks)
+                for num_cards in range(self.config.num_suits + 1)
+            ]
+        )
+        # Current player's action
+        token_strs.extend(
+            [f"a_{action_s}" for action_s in self.action_meanings.values()]
+        )
+        # Current player's action result
+        token_strs.extend(
+            [
+                f"ar_{result}"
+                for result in ["normal", "call_failed", "call_succeeded"]
+            ]
+        )
+        # End of game
+        token_strs.append("EOG")
+        # Enumerate and return
+        return {token_str: idx for idx, token_str in enumerate(token_strs)}
+
+
+def get_seqs_from_state_history(
+    game: CheatGame, vocab: Dict[str, int], state_history: List[CheatState]
+) -> Int64[t.Tensor, "batch pos"]:
+    """Function to represent a game state history as a batch of token
+    sequences, one sequence per game player.
+
+    """
+    assert (
+        len(state_history) % game.config.num_players == 0
+    ), "State history length must be a multiple of the number of players"
+    # Pull the actions, observed actions, and pile sizes out of the
+    # next states so we can iterate over these with the states
+    post_state_history = [
+        {
+            "action": state.prev_player_action,
+            # Hack, there was a bug in setting the observed action IDs before
+            "obs_action": game._action_id_to_obs_action_id(
+                state.prev_player_action), 
+            "pile_size": len(state.pile),
+        }
+        for state in state_history[1:]
+    ]
+
+    def get_action_result(action, pile_size):
+        result = "normal"
+        action_s = game.action_meanings[action]
+        if action_s.endswith("call"):
+            if pile_size == 0:
+                result = "call_failed"
+            else:
+                result = "call_succeeded"
+        return result
+
+    # Iterate over the state history one for each player, with that
+    # player as the "active player"
+    tokens_all = []
+    for player in range(game.config.num_players):
+        tokens = ["BOG"]
+        for state, post_state in zip(state_history[:-1], post_state_history):
+            if state.current_player == player:
+                # This state contains action information about the
+                # current player, so enumerate player's hand, action and
+                # action result
+                # Cards for each rank
+                for rank in range(game.config.num_ranks):
+                    num_cards = sum(
+                        card.rank == rank
+                        for card in state.hands[state.current_player]
+                    )
+                    tokens.append(f"hand_{num_cards}x{rank}")
+                # Action
+                tokens.append(
+                    f"a_{game.action_meanings[post_state['action']]}"
+                )
+                # Result
+                result = get_action_result(
+                    post_state["action"], post_state["pile_size"]
+                )
+                tokens.append(f"ar_{result}")
+            else:
+                # This is another player's turn, so store their observed
+                # action and result
+                player_seq_id = (
+                    state.current_player - player + game.config.num_players - 1
+                ) % game.config.num_players
+                tokens.append(
+                    f"oa_{player_seq_id}_"
+                    f"{game.obs_action_meanings[post_state['obs_action']]}"
+                )
+                result = get_action_result(
+                    post_state["action"], post_state["pile_size"]
+                )
+                tokens.append(f"ar_{player_seq_id}_{result}")
+            print(
+                state.current_player,
+                game.action_meanings[post_state["action"]],
+                game.obs_action_meanings[post_state["obs_action"]],
+                state.hands[state.current_player],
+            )
+        tokens.append("EOG")
+        tokens_all.append(tokens)
+    return tokens_all
 
 
 class CheatPlayer:
