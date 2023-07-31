@@ -66,8 +66,8 @@ PLAYER_WEIGHTS /= PLAYER_WEIGHTS.sum()
 # Run a large number of games with incrementing seeds, randomly
 # selecting players for each game, and recording the results (winner and
 # scores)
-NUM_GAMES = 1000
-MAX_TURNS = 60
+NUM_GAMES = 100000
+MAX_TURNS = 40
 
 # Create the game
 game = cheat.CheatGame(
@@ -106,6 +106,7 @@ for game_idx in tqdm(range(NUM_GAMES)):
         players=players,
         max_turns=MAX_TURNS,
         seed=rng.integers(1e6),
+        # verbose=True,
     )
 
     # Store results

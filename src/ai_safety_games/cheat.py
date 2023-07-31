@@ -738,13 +738,19 @@ class RandomCheatPlayer(CheatPlayer):
                 self.rng.choice(list(ranks_in_hand)),
                 False,
             )
-        elif sampled_action in ["play", "call"]:
-            # Play a random card, with call if specified
+        elif sampled_action == "play":
+            # Play a random allowed card
+            rank_to_play = self.rng.choice(list(allowed_ranks_in_hand))
+            action_s = game.get_play_card_action_from_fields(
+                rank_to_play, rank_to_play, False
+            )
+        elif sampled_action == "call":
+            # Play a random card, with call
             # Can be any card, because if the call succeeds, the pile
             # will be empty
             rank_to_play = self.rng.choice(list(ranks_in_hand))
             action_s = game.get_play_card_action_from_fields(
-                rank_to_play, rank_to_play, sampled_action == "call"
+                rank_to_play, rank_to_play, True
             )
         return action_s
 

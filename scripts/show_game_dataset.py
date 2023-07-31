@@ -18,7 +18,7 @@ utils.enable_ipython_reload()
 
 # %%
 # Load the results, then process into a dataframe for analysis
-FOLDER = os.path.join("../datasets/random_dataset_20230730T235148")
+FOLDER = os.path.join("../datasets/random_dataset_20230731T000859")
 
 # Load config info
 with open(os.path.join(FOLDER, "config.pkl"), "rb") as file:
