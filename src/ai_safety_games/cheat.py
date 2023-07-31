@@ -235,8 +235,8 @@ class CheatGame:
         action_s = self.action_meanings[action]
         action_s_split = action_s.split("_")
         obs_action_s = action_s_split[0]
-        if action_s.endswith('call')
-            obs_action_s += '_call'
+        if action_s.endswith("call"):
+            obs_action_s += "_call"
         return self.obs_action_ids[obs_action_s]
 
     def state_to_obs(self, state: CheatState) -> CheatObs:
@@ -586,7 +586,7 @@ class CheatGame:
         """Build a token vocabulary based on this game's
         configuration."""
         # Beginning of game
-        token_strs = ["BOG"]
+        token_strs = ["PAD", "BOG"]
         # Tokens for each other player
         for other_player in range(self.config.num_players - 1):
             # Other players' observed actions
@@ -645,11 +645,19 @@ def get_seqs_from_state_history(
             "action": state.prev_player_action,
             # Hack, there was a bug in setting the observed action IDs before
             "obs_action": game._action_id_to_obs_action_id(
-                state.prev_player_action), 
+                state.prev_player_action
+            ),
             "pile_size": len(state.pile),
         }
         for state in state_history[1:]
+    ] + [
+        {
+            "action": game.action_ids["pass"],
+            "obs_action": game.obs_action_ids["pass"],
+            "pile_size": len(state_history[-1].pile),
+        }
     ]
+    # TODO: fix the above hack, store the actions as well as states
 
     def get_action_result(action, pile_size):
         result = "normal"
@@ -665,8 +673,18 @@ def get_seqs_from_state_history(
     # player as the "active player"
     tokens_all = []
     for player in range(game.config.num_players):
-        tokens = ["BOG"]
-        for state, post_state in zip(state_history[:-1], post_state_history):
+        # Initialize the tokens with two padding token for each player
+        # that won't get a turn before the first turn of the player of
+        # interest, so that player actions are always in the same position
+        tokens = ["PAD"] * 2 * (
+            (
+                state_history[0].current_player
+                - player
+                + (game.config.num_players - 1)
+            )
+            % game.config.num_players
+        ) + ["BOG"]
+        for state, post_state in zip(state_history, post_state_history):
             if state.current_player == player:
                 # This state contains action information about the
                 # current player, so enumerate player's hand, action and
@@ -701,15 +719,21 @@ def get_seqs_from_state_history(
                     post_state["action"], post_state["pile_size"]
                 )
                 tokens.append(f"ar_{player_seq_id}_{result}")
-            print(
-                state.current_player,
-                game.action_meanings[post_state["action"]],
-                game.obs_action_meanings[post_state["obs_action"]],
-                state.hands[state.current_player],
-            )
+            # print(
+            #     state.current_player,
+            #     game.action_meanings[post_state["action"]],
+            #     game.obs_action_meanings[post_state["obs_action"]],
+            #     state.hands[state.current_player],
+            # )
+        # If the last round is incomplete, trim it
+        # TODO: this stuff is really hacky, clean it up sometime!
+        while tokens[-1].startswith("ar_") and tokens[-1][3].isdigit():
+            tokens.pop()
+            tokens.pop()
         tokens.append("EOG")
-        tokens_all.append(tokens)
-    return tokens_all
+        token_ids = t.tensor([vocab[token] for token in tokens], dtype=t.int64)
+        tokens_all.append(token_ids[None, :])
+    return t.cat(tokens_all, dim=0)
 
 
 class CheatPlayer:

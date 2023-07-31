@@ -66,7 +66,7 @@ PLAYER_WEIGHTS /= PLAYER_WEIGHTS.sum()
 # Run a large number of games with incrementing seeds, randomly
 # selecting players for each game, and recording the results (winner and
 # scores)
-NUM_GAMES = 100000
+NUM_GAMES = 500000
 MAX_TURNS = 40
 
 # Create the game
@@ -117,7 +117,7 @@ for game_idx in tqdm(range(NUM_GAMES)):
         "winning_player": player_indices[winning_player]
         if winning_player is not None
         else None,
-        "scores": {idx: score for idx, score in zip(player_indices, scores)},
+        "scores": list(zip(player_indices, scores)),
         "state_history_list": [vars(state) for state in game.state_history],
     }
     with lzma.open(os.path.join(folder, f"game_{game_idx}.pkl"), "wb") as file:
