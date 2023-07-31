@@ -696,11 +696,21 @@ class RandomCheatPlayer(CheatPlayer):
 
         ('cannot_play', 'play') entry will be forced to zero, and each
         column will be normalized automatically."""
+        assert all(
+            probs_table.columns == ["can_play", "cannot_play"]
+        ), "Probs table columns incorrect"
+        assert all(
+            probs_table.index == ["pass", "call", "cheat", "play"]
+        ), "Probs table index incorrect"
         self.probs_table = probs_table.copy()
         self.probs_table.loc["play", "cannot_play"] = 0
+        self.normalize_probs()
+        self.rng = np.random.default_rng(seed=seed)
+
+    def normalize_probs(self):
+        """Normalize the probabilities in the table."""
         for col in self.probs_table.columns:
             self.probs_table[col] /= self.probs_table[col].sum()
-        self.rng = np.random.default_rng(seed=seed)
 
     def reset(self, seed: Optional[int] = None):
         """Resets the player, optionally with a new seed."""
@@ -719,44 +729,144 @@ class RandomCheatPlayer(CheatPlayer):
             self.probs_table.index,
             p=self.probs_table["can_play" if can_play else "cannot_play"],
         )
-        # Turn this into a specific action:
+        # Turn this into a specific action
         action_s = sampled_action
         if sampled_action == "cheat":
-            # Always play the lowest card you have,
-            # and always claim the highest rank you can
+            # Play a random card, claim a random allowed rank
             action_s = game.get_play_card_action_from_fields(
-                max(obs.allowed_next_ranks), min(ranks_in_hand), False
+                self.rng.choice(obs.allowed_next_ranks),
+                self.rng.choice(list(ranks_in_hand)),
+                False,
             )
-        elif sampled_action == "play":
-            # Play the lowest rank you can
-            rank_to_play = min(allowed_ranks_in_hand)
+        elif sampled_action in ["play", "call"]:
+            # Play a random card, with call if specified
+            # Can be any card, because if the call succeeds, the pile
+            # will be empty
+            rank_to_play = self.rng.choice(list(ranks_in_hand))
             action_s = game.get_play_card_action_from_fields(
-                rank_to_play, rank_to_play, False
+                rank_to_play, rank_to_play, sampled_action == "call"
             )
-        elif sampled_action == "call":
-            # We need to include a play in our action, so sample again
-            # to decide if we should play or cheat, and act accordingly.
-            play_cheat_probs = self.probs_table["can_play"].loc[
-                ["play", "cheat"]
-            ]
-            play_cheat_probs /= play_cheat_probs.sum()
-            play_or_cheat = self.rng.choice(
-                play_cheat_probs.index, p=play_cheat_probs
-            )
-            if play_or_cheat == "play":
-                # Play the lowest card you have, pile will be clear if
-                # call succeeds
-                rank_to_play = min(ranks_in_hand)
-                action_s = game.get_play_card_action_from_fields(
-                    rank_to_play, rank_to_play, True
-                )
-            else:
-                # Always play the lowest card you have,
-                # and always claim the highest rank you can
-                action_s = game.get_play_card_action_from_fields(
-                    max(obs.allowed_next_ranks), min(ranks_in_hand), True
-                )
         return action_s
+
+
+class NaiveCheatPlayer(RandomCheatPlayer):
+    """Special case of random player that never cheats or calls."""
+
+    def __init__(self, seed: int = 0):
+        probs_table = pd.DataFrame(
+            {"can_play": [0, 0, 0, 1], "cannot_play": [1, 0, 0, 0]},
+            index=["pass", "call", "cheat", "play"],
+        )
+        super().__init__(probs_table=probs_table, seed=seed)
+
+
+class XRayCheatPlayer(RandomCheatPlayer):
+    """Special case of random player that x-ray visions the pile and
+    calls if and only if the previous player cheated."""
+
+    def __init__(self, probs_table: pd.DataFrame, seed: int = 0):
+        super().__init__(probs_table=probs_table, seed=seed)
+        self.base_probs_table = self.probs_table.copy()
+
+    def step(self, obs: CheatObs, game: CheatGame) -> ActionId:
+        """Check if the previous player cheated, and override call
+        probabilities accordingly."""
+        # Previous player cheated if they didn't pass, the pile isn't
+        # empty, and the card the previous player claimed is not the top
+        # card in the pile
+        prev_player_cheated = (
+            obs.prev_player_obs_action != game.obs_action_ids["pass"]
+            and obs.num_in_pile > 0
+            and obs.last_claimed_rank != game.state.pile[-1].rank
+        )
+        # Update the probability table
+        if prev_player_cheated:
+            self.probs_table["can_play"] = [0, 1, 0, 0]
+            self.probs_table["cannot_play"] = [0, 1, 0, 0]
+        else:
+            self.probs_table = self.base_probs_table.copy()
+            self.probs_table.at["call", "can_play"] = 0.0
+            self.probs_table.at["call", "cannot_play"] = 0.0
+            self.normalize_probs()
+        # Call the usual step function
+        return super().step(obs, game)
+
+
+class AdaptiveCheatPlayer(RandomCheatPlayer):
+    """Cheat player that adapts the probability of cheating and calling
+    based on the size of the pile and the size of opponents' hands.
+    """
+
+    def __init__(
+        self, max_call_prob: float, max_cheat_prob: float, seed: int = 0
+    ):
+        self.max_call_prob = max_call_prob
+        self.max_cheat_prob = max_cheat_prob
+        # Start with a naive player, will be adapted each step
+        probs_table = pd.DataFrame(
+            {"can_play": [0, 0, 0, 1], "cannot_play": [1, 0, 0, 0]},
+            index=["pass", "call", "cheat", "play"],
+        )
+        super().__init__(probs_table=probs_table, seed=seed)
+
+    def step(self, obs: CheatObs, game: CheatGame) -> ActionId:
+        """Adapt the probabilities based on the size of the pile and
+        opponents' hands, then sample an action.  Specifically, the
+        decision of whether to call should be based on a simple estimate
+        of the chance that the previous player cheated, which is just
+        the chance that the player had a card of an allowed rank in
+        their hand.  This chance should be the same whether or not we
+        can play.  If we can play and don't call, we should always play.
+        If we can't play and don't call, we should choose to cheat based
+        on the size of the pile: if it's empty, always cheat, if it
+        contains the entire deck, cheat with prob P (provided as
+        parameter), and interpolate in between.  Also, some special
+        rules: if a card was claimed that you have all instances of in
+        your hand, always call.
+        """
+        # Calculate the call probability
+        # Check if the previous action was a played card; if not, we
+        # can't call
+        deck_size = game.config.num_suits * game.config.num_ranks
+        prev_action_s = game.obs_action_meanings.get(
+            obs.prev_player_obs_action, None
+        )
+        if (
+            prev_action_s is None
+            or prev_action_s == "pass"
+            or obs.num_in_pile == 0
+        ):
+            call_prob = 0.0
+        else:
+            # We can call, so check if all the instances of the last
+            # claimed card are in our hand
+            num_in_hand_matching_claim = len(
+                [
+                    card
+                    for card in obs.cards_in_hand
+                    if card.rank == obs.last_claimed_rank
+                ]
+            )
+            if num_in_hand_matching_claim == game.config.num_suits:
+                call_prob = 1.0
+            else:
+                # We shouldn't definitely call, so calculate an
+                # approximate probability
+                call_prob = self.max_call_prob * (
+                    1 - (obs.num_in_other_hands[0] / deck_size)
+                ) ** (game.config.num_suits - num_in_hand_matching_claim)
+        # Calculate the cheat probability based on the size of the pile
+        cheat_prob = self.max_cheat_prob * (1 - (obs.num_in_pile / deck_size))
+        # Update the probability table
+        self.probs_table["can_play"] = [0, call_prob, 0, 1 - call_prob]
+        self.probs_table["cannot_play"] = [
+            (1 - call_prob) * (1 - cheat_prob),
+            call_prob,
+            (1 - call_prob) * cheat_prob,
+            0,
+        ]
+        # Run a normal step
+        return super().step(obs, game)
 
 
 def run(

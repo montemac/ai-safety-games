@@ -198,7 +198,7 @@ def test_func(
 # Train using library function
 
 # Hyperparams
-TRAINING_MINS = 5
+TRAINING_MINS = 3
 BATCH_SIZE = 1000
 LOG_PERIOD = 50000
 D_MODEL = 64
@@ -243,7 +243,7 @@ results = training.train_decision_transformer(
 
 
 # %%
-# Test the model
+# Show results
 model = results.model
 training_results = results.results
 config = results.config

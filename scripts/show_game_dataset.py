@@ -18,31 +18,31 @@ utils.enable_ipython_reload()
 
 # %%
 # Load the results, then process into a dataframe for analysis
-FOLDER = os.path.join("../datasets/random_dataset_20230628T112736")
+FOLDER = os.path.join("../datasets/random_dataset_20230730T235148")
 
 # Load config info
 with open(os.path.join(FOLDER, "config.pkl"), "rb") as file:
     config_dict = pickle.load(file)
     game_config = cheat.CheatConfig(**config_dict["game.config"])
-    players_all = [
-        cheat.RandomCheatPlayer(player_config["probs_table"])
-        for player_config in config_dict["players"]
-    ]
+    # players_all = [
+    #     cheat.RandomCheatPlayer(player_config["probs_table"])
+    #     for player_config in config_dict["players"]
+    # ]
 
 # Load summary data
 with open(os.path.join(FOLDER, "summary.pkl"), "rb") as file:
     summary_lists = pickle.load(file)
 
-# Create player probability arrays
-prob_arrays = []
-for player in players_all:
-    probs = player.probs_table.T.stack()
-    probs.index = [f"prob-{level1}-{level2}" for level1, level2 in probs.index]
-    prob_arrays.append(probs)
+# # Create player probability arrays
+# prob_arrays = []
+# for player in players_all:
+#     probs = player.probs_table.T.stack()
+#     probs.index = [f"prob-{level1}-{level2}" for level1, level2 in probs.index]
+#     prob_arrays.append(probs)
 
 # Assemble into a dataframe
 # Probs first
-player_data = pd.DataFrame(prob_arrays)
+player_data = {}
 
 # Games by player
 player_data["game_count"] = (
@@ -50,6 +50,7 @@ player_data["game_count"] = (
     .value_counts()
     .sort_index()
 )
+player_data = pd.DataFrame(player_data)
 
 # Wins by player, and win rate
 player_data["win_count"] = (
@@ -57,18 +58,18 @@ player_data["win_count"] = (
 )
 player_data["win_rate"] = player_data["win_count"] / player_data["game_count"]
 
-# Group by each probability, and average the win rate, then concatentate
-# into a single dataframe
-win_rates_df = (
-    player_data.reset_index()
-    .melt(
-        id_vars=["win_rate", "index"],
-        value_vars=prob_cols,
-        var_name="prob_name",
-        value_name="prob",
-    )
-    .join(player_data[prob_cols], "index")
-)
+# # Group by each probability, and average the win rate, then concatentate
+# # into a single dataframe
+# win_rates_df = (
+#     player_data.reset_index()
+#     .melt(
+#         id_vars=["win_rate", "index"],
+#         value_vars=prob_cols,
+#         var_name="prob_name",
+#         value_name="prob",
+#     )
+#     .join(player_data[prob_cols], "index")
+# )
 
 
 # %%

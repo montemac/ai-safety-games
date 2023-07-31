@@ -78,7 +78,7 @@ px.ecdf(mean_margins_by_player, title="CDF of mean margins by player").show()
 px.histogram(
     all_margins["margin"], title="Histogram of margins in training data"
 ).show()
-px.ecdf(all_margins["margin"], title="CDF of all margins").show()
+# px.ecdf(all_margins["margin"], title="CDF of all margins").show()
 
 
 # %%
@@ -149,57 +149,57 @@ best_k_margins_all = best_k_margins_all.join(
 )
 
 
-# # Plot scatter of model margin vs. goal RTG, overlay top-K players
-# fig = px.scatter(
-#     results_df,
-#     x="goal_rtg",
-#     y="model_margin",
-#     opacity=0.2,
-#     title="Model victory margin vs goal RTG",
-# )
-# fig.add_scatter(
-#     x=best_k_margins_all["margin_mean"],
-#     y=best_k_margins_all["margin"],
-#     mode="markers",
-#     marker=dict(color="red", opacity=0.01),
-#     name="Best K players",
-# )
-# fig.update_layout(height=600)
-# fig.show()
+# Plot scatter of model margin vs. goal RTG, overlay top-K players
+fig = px.scatter(
+    results_df,
+    x="goal_rtg",
+    y="model_margin",
+    opacity=0.2,
+    title="Model victory margin vs goal RTG",
+)
+fig.add_scatter(
+    x=best_k_margins_all["margin_mean"],
+    y=best_k_margins_all["margin"],
+    mode="markers",
+    marker=dict(color="red", opacity=0.01),
+    name="Best K players",
+)
+fig.update_layout(height=600)
+fig.show()
 
-# # Show histograms of margin for model in certain RTG range, and for
-# # top-K players that span similar mean margins
-# rtg_range = (
-#     best_k_margins_all["margin_mean"].min(),
-#     best_k_margins_all["margin_mean"].max(),
-# )
-# model_good_margins = results_df["model_margin"][
-#     results_df["goal_rtg"].between(*rtg_range)
-# ]
-# top_k_good_margins = best_k_margins_all["margin"]
-# plot_margins = (
-#     pd.concat(
-#         [
-#             model_good_margins.rename("margin").to_frame(),
-#             top_k_good_margins.to_frame(),
-#         ],
-#         keys=["model", "top_k"],
-#         names=["player"],
-#     )
-#     .reset_index()
-#     .drop("level_1", axis=1)
-# )
-# fig = px.histogram(
-#     plot_margins,
-#     x="margin",
-#     color="player",
-#     histnorm="probability",
-#     title='Histogram of "good" margins for RTG-conditioned'
-#     " model and top-K players",
-# )
-# fig.update_layout(barmode="overlay")
-# fig.update_traces(opacity=0.75)
-# fig.show()
+# Show histograms of margin for model in certain RTG range, and for
+# top-K players that span similar mean margins
+rtg_range = (
+    best_k_margins_all["margin_mean"].min(),
+    best_k_margins_all["margin_mean"].max(),
+)
+model_good_margins = results_df["model_margin"][
+    results_df["goal_rtg"].between(*rtg_range)
+]
+top_k_good_margins = best_k_margins_all["margin"]
+plot_margins = (
+    pd.concat(
+        [
+            model_good_margins.rename("margin").to_frame(),
+            top_k_good_margins.to_frame(),
+        ],
+        keys=["model", "top_k"],
+        names=["player"],
+    )
+    .reset_index()
+    .drop("level_1", axis=1)
+)
+fig = px.histogram(
+    plot_margins,
+    x="margin",
+    color="player",
+    histnorm="probability",
+    title='Histogram of "good" margins for RTG-conditioned'
+    " model and top-K players",
+)
+fig.update_layout(barmode="overlay")
+fig.update_traces(opacity=0.75)
+fig.show()
 
 
 # %%
