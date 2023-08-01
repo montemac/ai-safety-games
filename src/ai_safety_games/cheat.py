@@ -48,7 +48,7 @@ import pandas as pd
 import torch as t
 from jaxtyping import Int64
 
-from ai_safety_games import models
+from transformer_lens import HookedTransformer
 
 
 ActionId = int
@@ -585,8 +585,19 @@ class CheatGame:
     def get_token_vocab(self) -> Dict[str, int]:
         """Build a token vocabulary based on this game's
         configuration."""
-        # Beginning of game
-        token_strs = ["PAD", "BOG"]
+        token_strs = []
+        # Current player's action
+        token_strs.extend(
+            [f"a_{action_s}" for action_s in self.action_meanings.values()]
+        )
+        player_action_vocab_len = len(token_strs)
+        # Current player's action result
+        token_strs.extend(
+            [
+                f"ar_{result}"
+                for result in ["normal", "call_failed", "call_succeeded"]
+            ]
+        )
         # Tokens for each other player
         for other_player in range(self.config.num_players - 1):
             # Other players' observed actions
@@ -611,21 +622,17 @@ class CheatGame:
                 for num_cards in range(self.config.num_suits + 1)
             ]
         )
-        # Current player's action
-        token_strs.extend(
-            [f"a_{action_s}" for action_s in self.action_meanings.values()]
-        )
-        # Current player's action result
-        token_strs.extend(
-            [
-                f"ar_{result}"
-                for result in ["normal", "call_failed", "call_succeeded"]
-            ]
-        )
-        # End of game
-        token_strs.append("EOG")
+        # Special tokens (padding, beginning, end of game)
+        token_strs.extend(["PAD", "BOG", "EOG"])
         # Enumerate and return
-        return {token_str: idx for idx, token_str in enumerate(token_strs)}
+        vocab = {token_str: idx for idx, token_str in enumerate(token_strs)}
+        player_action_vocab = {
+            token_str: idx
+            for token_str, idx in enumerate(
+                token_strs[:player_action_vocab_len]
+            )
+        }
+        return vocab, player_action_vocab
 
 
 def get_seqs_from_state_history(
@@ -676,14 +683,14 @@ def get_seqs_from_state_history(
         # Initialize the tokens with two padding token for each player
         # that won't get a turn before the first turn of the player of
         # interest, so that player actions are always in the same position
-        tokens = ["PAD"] * 2 * (
+        tokens = ["BOG"] + ["PAD"] * 2 * (
             (
                 state_history[0].current_player
                 - player
                 + (game.config.num_players - 1)
             )
             % game.config.num_players
-        ) + ["BOG"]
+        )
         for state, post_state in zip(state_history, post_state_history):
             if state.current_player == player:
                 # This state contains action information about the
@@ -787,7 +794,7 @@ class ModelCheatPlayer(CheatPlayer):
 
     def __init__(
         self,
-        model: models.DecisionTransformer,
+        model: HookedTransformer,
         goal_rtg: float,
         temperature: float = 1.0,
         seed: int = 0,

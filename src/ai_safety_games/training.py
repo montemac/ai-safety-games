@@ -14,8 +14,7 @@ import torch as t
 from torch import nn, optim
 from torch.utils.data import DataLoader, TensorDataset
 from jaxtyping import Float32, Int64, Bool
-
-from ai_safety_games import models
+from transformer_lens import HookedTransformer
 
 
 @dataclass
@@ -40,21 +39,25 @@ class TrainingConfig:
     save_results: bool = True
 
 
+# Type hint for a dataset of tensors for training some kind of custom
+# transformer
 @dataclass
-class RSATensors:
-    """Tensors for an RSA dataset."""
+class TrainingTensors:
+    """List of tensors that will be passed (in provided order) to
+    forward call, plus a tensor of target outputs (e.g. actions) which
+    might be a subset of the inputs."""
 
-    rtgs: Float32[t.Tensor, "idx timestep"]
-    states: Float32[t.Tensor, "idx timestep state"]
-    actions: Int64[t.Tensor, "idx timestep"]
+    inputs: list[t.Tensor]
+    output: t.Tensor
+    loss_mask: t.Tensor
 
 
 @dataclass
-class DecisionTransformerTrainingResults:
+class TrainingResults:
     """Results from training a decision transformer model."""
 
     config: TrainingConfig
-    model: models.DecisionTransformer
+    model: nn.Module
     results: pd.DataFrame
 
 
@@ -63,10 +66,10 @@ class DecisionTransformerTrainingResults:
 TestFunc = Callable[[nn.Module, TrainingConfig, int], Dict[str, Any]]
 
 
-def train_decision_transformer(
-    model: models.DecisionTransformer,
+def train_custom_transformer(
+    model: HookedTransformer,
     config: TrainingConfig,
-    training_data: RSATensors,
+    training_data: TrainingTensors,
     test_func: Optional[TestFunc] = None,
 ):
     """Train a decision transformer model given an RSA dataset. Assumes
@@ -85,9 +88,7 @@ def train_decision_transformer(
         model.parameters(), lr=config.lr, weight_decay=config.weight_decay
     )
     dataset = TensorDataset(
-        training_data.rtgs,
-        training_data.states,
-        training_data.actions,
+        *training_data.inputs, training_data.output, training_data.loss_mask
     )
     dataloader = DataLoader(
         dataset, batch_size=config.batch_size, shuffle=True
@@ -106,19 +107,23 @@ def train_decision_transformer(
     # Run the training loop
     # for epoch in tqdm(range(NUM_EPOCHS)):
     while elapsed_mins < config.training_mins:
-        for batch_idx, (rtgs_batch, states_batch, actions_batch) in enumerate(
-            dataloader
-        ):
+        for batch_idx, training_batch in enumerate(dataloader):
+            # Split into inputs and outputs
+            inputs_batch = training_batch[:-2]
+            output_batch = training_batch[-2]
+            loss_mask_batch = training_batch[-1]
+            batch_size = output_batch.shape[0]
+
             # Zero the parameter gradients
             optimizer.zero_grad()
 
             # Forward + backward + optimize
-            logits = model(
-                rtgs=rtgs_batch, states=states_batch, actions=actions_batch
+            logits = model(*inputs_batch)
+            loss = model.loss_fn(
+                logits, output_batch, loss_mask=loss_mask_batch
             )
-            loss = model.loss_fn(logits=logits, actions=actions_batch)
-            loss_total += loss.item() * rtgs_batch.shape[0]
-            loss_cnt += rtgs_batch.shape[0]
+            loss_total += loss.item() * batch_size
+            loss_cnt += batch_size
             loss.backward()
             optimizer.step()
 
@@ -127,7 +132,7 @@ def train_decision_transformer(
             progress_bar.update(elapsed_mins - progress_bar.n)
 
             # Determine whether to run tests and log results
-            since_last_log += rtgs_batch.shape[0]
+            since_last_log += batch_size
             if since_last_log >= config.log_period:
                 # Update training loss
                 loss_train = loss_total / loss_cnt
@@ -149,47 +154,6 @@ def train_decision_transformer(
                         )
                         results_this.update(test_results)
 
-                        # for test_name, test in test_data.items():
-                        #     # Forward pass to get logits
-                        #     actions = test.data.actions
-                        #     logits = model(
-                        #         rtgs=test.data.rtgs,
-                        #         states=test.data.states,
-                        #         actions=actions,
-                        #     )
-                        #     # Mask out logits and actions for timesteps
-                        #     # where we don't care about the loss
-                        #     if test.loss_mask is not None:
-                        #         logits = logits[:, test.loss_mask, :]
-                        #         actions = test.data.actions[:, test.loss_mask]
-                        #     # Take argmax to get predicted actions, and
-                        #     # calculate accuracy
-                        #     actions_pred = t.argmax(logits, dim=-1)
-                        #     accuracy = (actions_pred == actions).float()
-                        #     # Calcualte loss
-                        #     loss = model.loss_fn(
-                        #         logits=logits,
-                        #         actions=actions,
-                        #         per_token=True,
-                        #     )
-                        #     # Reduce accuracy and loss according to specified method
-                        #     if test.reduction == "mean_all":
-                        #         accuracy = t.mean(accuracy)
-                        #         loss = t.mean(loss)
-                        #     elif test.reduction == "mean_timestep":
-                        #         accuracy = t.mean(accuracy, dim=1)
-                        #         loss = t.mean(loss, dim=1)
-                        #     elif test.reduction == "mean_batch":
-                        #         accuracy = t.mean(accuracy, dim=0)
-                        #         loss = t.mean(loss, dim=0)
-                        #     # Store results
-                        #     test_accuracy_results[test_name].append(
-                        #         accuracy.detach().cpu().numpy()
-                        #     )
-                        #     test_loss_results[test_name].append(
-                        #         loss.detach().cpu().numpy()
-                        #     )
-
                 # Store results
                 training_results.append(results_this)
 
@@ -207,7 +171,7 @@ def train_decision_transformer(
     os.makedirs(output_dir, exist_ok=True)
 
     # Store results
-    final_results = DecisionTransformerTrainingResults(
+    final_results = TrainingResults(
         config=config,
         model=model,
         results=training_results,

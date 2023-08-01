@@ -8,7 +8,7 @@ import os
 import lzma
 
 # TEMP
-# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 from sortedcontainers import SortedList
 from collections import defaultdict
@@ -19,8 +19,13 @@ import torch.optim as optim
 from torch.utils.data import random_split
 from tqdm.auto import tqdm
 import plotly.express as px
+from transformer_lens import HookedTransformerConfig
 
-from ai_safety_games import cheat, utils, models, training
+from ai_safety_games import cheat, utils, training
+from ai_safety_games.ScoreTransformer import (
+    ScoreTransformer,
+    ScoreTransformerConfig,
+)
 
 utils.enable_ipython_reload()
 
@@ -47,14 +52,14 @@ with open(os.path.join(FOLDER, "summary.pkl"), "rb") as file:
 
 
 # Get the token vocab
-vocab = game.get_token_vocab()
+vocab, player_action_vocab = game.get_token_vocab()
 vocab_strs = {idx: tok for tok, idx in vocab.items()}
 
 # Load games and convert to token tensors plus scores
 tokens_list = []
 scores_list = []
 for game_idx, filename in enumerate(
-    tqdm(sorted(glob.glob(os.path.join(FOLDER, "game_*.pkl")))[:10])
+    tqdm(sorted(glob.glob(os.path.join(FOLDER, "game_*.pkl")))[:10000])
 ):
     with lzma.open(filename, "rb") as file:
         game_results = pickle.load(file)
@@ -78,9 +83,25 @@ for game_idx, filename in enumerate(
 
 # Convert to single tokens tensor, scores tensor, and seq lengths tensor
 # Use pad_sequence to pad to the max length of any game
-tokens = t.nn.utils.rnn.pad_sequence(tokens_list, batch_first=True)
-scores = t.tensor(scores_list, dtype=t.float32)
-seq_lens = t.tensor([len(toks) for toks in tokens_list], dtype=t.int64)
+tokens = t.nn.utils.rnn.pad_sequence(
+    tokens_list, batch_first=True, padding_value=0
+).to(DEVICE)
+scores = t.tensor(np.array(scores_list).flatten(), dtype=t.float32).to(DEVICE)
+seq_lens = t.tensor([len(toks) for toks in tokens_list], dtype=t.int64).to(
+    DEVICE
+)
+
+# Positions corresponding to actions
+first_action_pos = (
+    (game_config.num_players - 1) * 2 + 1 + game.config.num_ranks
+)
+action_pos_step = game_config.num_players * 2 + game.config.num_ranks
+
+# Turn sequence lengths into a loss mask
+loss_mask = t.zeros_like(tokens, dtype=t.float32)
+for idx, seq_len in enumerate(seq_lens):
+    loss_mask[idx, :seq_len] = 1
+loss_mask = loss_mask[:, first_action_pos::action_pos_step]
 
 
 # %%
@@ -109,61 +130,67 @@ seq_lens = t.tensor([len(toks) for toks in tokens_list], dtype=t.int64)
 
 # %%
 # Training loop using library function
-# TRAINING_MINS = 40
-# BATCH_SIZE = 100
-# LOG_PERIOD = 5000
-# N_LAYERS = 8
-# D_MODEL = 128
-# D_HEAD = 16
-# LR = 0.001
-# WEIGHT_DECAY = 0.01
-# SEED = 0
+TRAINING_MINS = 2
+BATCH_SIZE = 100
+LOG_PERIOD = 10000
+N_LAYERS = 1
+D_MODEL = 64
+D_HEAD = 8
+LR = 0.001
+WEIGHT_DECAY = 0.01
+SEED = 0
 
-# # Split data into train and test sets
-# # TODO: probably a simpler way to do this
-# generator = t.Generator().manual_seed(SEED)
-# train_inds, test_inds = [
-#     t.tensor(subset)
-#     for subset in random_split(
-#         range(rtgs.shape[0]), [0.8, 0.2], generator=generator
-#     )
-# ]
+# Split data into train and test sets
+# TODO: probably a simpler way to do this
+generator = t.Generator().manual_seed(SEED)
+train_inds, test_inds = [
+    t.tensor(subset)
+    for subset in random_split(
+        range(tokens.shape[0]), [0.8, 0.2], generator=generator
+    )
+]
 
-# # Initialize a simple test model
-# model = models.DecisionTransformer(
-#     models.DecisionTransformerConfig(
-#         n_layers=4,
-#         d_model=D_MODEL,
-#         d_head=D_HEAD,
-#         d_state=state_tensors[0].shape[-1],
-#         d_action=D_ACTION,
-#         act_fn="relu",
-#         device=DEVICE,
-#         seed=SEED,
-#         n_timesteps=N_TIMESTEPS,
-#         attn_only=False,
-#     )
-# )
+# Initialize a simple test model
+model = ScoreTransformer(
+    cfg=HookedTransformerConfig(
+        n_layers=4,
+        d_model=D_MODEL,
+        d_head=D_HEAD,
+        d_vocab=len(vocab),
+        d_vocab_out=len(player_action_vocab),
+        act_fn="relu",
+        device=DEVICE,
+        seed=SEED,
+        n_ctx=seq_lens.max().item(),
+        attn_only=True,
+    ),
+    st_cfg=ScoreTransformerConfig(
+        first_action_pos=first_action_pos, action_pos_step=action_pos_step
+    ),
+)
 
-# # Train!
-# results = training.train_decision_transformer(
-#     model=model,
-#     config=training.TrainingConfig(
-#         project_name="cheat",
-#         training_mins=TRAINING_MINS,
-#         batch_size=BATCH_SIZE,
-#         lr=LR,
-#         weight_decay=WEIGHT_DECAY,
-#         log_period=LOG_PERIOD,
-#         seed=SEED,
-#     ),
-#     training_data=training.RSATensors(
-#         rtgs=rtgs[train_inds],
-#         states=states[train_inds],
-#         actions=actions[train_inds],
-#     ),
-#     # test_func=test_func,
-# )
+# Train!
+results = training.train_custom_transformer(
+    model=model,
+    config=training.TrainingConfig(
+        project_name="cheat",
+        training_mins=TRAINING_MINS,
+        batch_size=BATCH_SIZE,
+        lr=LR,
+        weight_decay=WEIGHT_DECAY,
+        log_period=LOG_PERIOD,
+        seed=SEED,
+        save_results=False,
+    ),
+    training_data=training.TrainingTensors(
+        inputs=[tokens[train_inds], scores[train_inds]],
+        output=tokens[train_inds, first_action_pos::action_pos_step]
+        .detach()
+        .clone(),
+        loss_mask=loss_mask[train_inds],
+    ),
+    # test_func=test_func,
+)
 
 
 # %%
