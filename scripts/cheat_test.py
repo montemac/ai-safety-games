@@ -35,7 +35,11 @@ DATASET_FOLDER = "../datasets/random_dataset_20230731T001342"
 # 1L attn-only model
 # TRAINING_RESULTS_FN = "cheat_results/20230801T105951/results.pkl"
 # 4L full model
-TRAINING_RESULTS_FN = "cheat_results/20230801T111728/results.pkl"
+# TRAINING_RESULTS_FN = "cheat_results/20230801T111728/results.pkl"
+# 4L full model, separate score and BOG embeddings
+# TRAINING_RESULTS_FN = "cheat_results/20230801T123246/results.pkl"
+# 8L full model, separate score and BOG embeddings
+TRAINING_RESULTS_FN = "cheat_results/20230801T130838/results.pkl"
 
 # Load model
 with open(TRAINING_RESULTS_FN, "rb") as file:

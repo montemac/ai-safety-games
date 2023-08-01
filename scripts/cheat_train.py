@@ -61,7 +61,7 @@ vocab_strs = {idx: tok for tok, idx in vocab.items()}
 tokens_list = []
 scores_list = []
 for game_idx, filename in enumerate(
-    tqdm(sorted(glob.glob(os.path.join(FOLDER, "game_*.pkl")))[:100000])
+    tqdm(sorted(glob.glob(os.path.join(FOLDER, "game_*.pkl")))[:200000])
 ):
     with lzma.open(filename, "rb") as file:
         game_results = pickle.load(file)
@@ -85,11 +85,13 @@ for game_idx, filename in enumerate(
 
 # Convert to single tokens tensor, scores tensor, and seq lengths tensor
 # Use pad_sequence to pad to the max length of any game
-tokens = t.nn.utils.rnn.pad_sequence(
+tokens_all = t.nn.utils.rnn.pad_sequence(
     tokens_list, batch_first=True, padding_value=0
 ).to(DEVICE)
-scores = t.tensor(np.array(scores_list).flatten(), dtype=t.float32).to(DEVICE)
-seq_lens = t.tensor([len(toks) for toks in tokens_list], dtype=t.int64).to(
+scores_all = t.tensor(np.array(scores_list).flatten(), dtype=t.float32).to(
+    DEVICE
+)
+seq_lens_all = t.tensor([len(toks) for toks in tokens_list], dtype=t.int64).to(
     DEVICE
 )
 
@@ -100,8 +102,8 @@ first_action_pos = (
 action_pos_step = game_config.num_players * 2 + game.config.num_ranks
 
 # Turn sequence lengths into a loss mask
-loss_mask = t.zeros_like(tokens, dtype=t.float32)
-for idx, seq_len in enumerate(seq_lens):
+loss_mask = t.zeros_like(tokens_all, dtype=t.float32)
+for idx, seq_len in enumerate(seq_lens_all):
     loss_mask[idx, :seq_len] = 1
 loss_mask = loss_mask[:, first_action_pos::action_pos_step]
 
@@ -132,10 +134,10 @@ loss_mask = loss_mask[:, first_action_pos::action_pos_step]
 
 # %%
 # Training loop using library function
-TRAINING_MINS = 1
+TRAINING_MINS = 20
 BATCH_SIZE = 100
 LOG_PERIOD = 10000
-N_LAYERS = 4
+N_LAYERS = 8
 D_MODEL = 128
 D_HEAD = 16
 ATTN_ONLY = False
@@ -149,7 +151,7 @@ generator = t.Generator().manual_seed(SEED)
 train_inds, test_inds = [
     t.tensor(subset)
     for subset in random_split(
-        range(tokens.shape[0]), [0.8, 0.2], generator=generator
+        range(tokens_all.shape[0]), [0.8, 0.2], generator=generator
     )
 ]
 
@@ -164,7 +166,7 @@ model = ScoreTransformer(
         act_fn="relu",
         device=DEVICE,
         seed=SEED,
-        n_ctx=seq_lens.max().item(),
+        n_ctx=seq_lens_all.max().item(),
         attn_only=ATTN_ONLY,
     ),
     st_cfg=ScoreTransformerConfig(
@@ -176,8 +178,8 @@ model = ScoreTransformer(
 test_inds_small = test_inds[:1000]
 test_func = training.make_standard_test_func(
     test_data=training.TrainingTensors(
-        inputs=[tokens[test_inds_small], scores[test_inds_small]],
-        output=tokens[test_inds_small, first_action_pos::action_pos_step]
+        inputs=[tokens_all[test_inds_small], scores_all[test_inds_small]],
+        output=tokens_all[test_inds_small, first_action_pos::action_pos_step]
         .detach()
         .clone(),
         loss_mask=loss_mask[test_inds_small],
@@ -199,8 +201,8 @@ results = training.train_custom_transformer(
         save_results=True,
     ),
     training_data=training.TrainingTensors(
-        inputs=[tokens[train_inds], scores[train_inds]],
-        output=tokens[train_inds, first_action_pos::action_pos_step]
+        inputs=[tokens_all[train_inds], scores_all[train_inds]],
+        output=tokens_all[train_inds, first_action_pos::action_pos_step]
         .detach()
         .clone(),
         loss_mask=loss_mask[train_inds],
