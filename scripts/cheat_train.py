@@ -8,7 +8,7 @@ import os
 import lzma
 
 # TEMP
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 from sortedcontainers import SortedList
 from collections import defaultdict
@@ -59,7 +59,7 @@ vocab_strs = {idx: tok for tok, idx in vocab.items()}
 tokens_list = []
 scores_list = []
 for game_idx, filename in enumerate(
-    tqdm(sorted(glob.glob(os.path.join(FOLDER, "game_*.pkl")))[:10000])
+    tqdm(sorted(glob.glob(os.path.join(FOLDER, "game_*.pkl")))[:100000])
 ):
     with lzma.open(filename, "rb") as file:
         game_results = pickle.load(file)
@@ -130,12 +130,13 @@ loss_mask = loss_mask[:, first_action_pos::action_pos_step]
 
 # %%
 # Training loop using library function
-TRAINING_MINS = 2
+TRAINING_MINS = 7
 BATCH_SIZE = 100
 LOG_PERIOD = 10000
-N_LAYERS = 1
-D_MODEL = 64
-D_HEAD = 8
+N_LAYERS = 4
+D_MODEL = 128
+D_HEAD = 16
+ATTN_ONLY = False
 LR = 0.001
 WEIGHT_DECAY = 0.01
 SEED = 0
@@ -153,7 +154,7 @@ train_inds, test_inds = [
 # Initialize a simple test model
 model = ScoreTransformer(
     cfg=HookedTransformerConfig(
-        n_layers=4,
+        n_layers=N_LAYERS,
         d_model=D_MODEL,
         d_head=D_HEAD,
         d_vocab=len(vocab),
@@ -162,11 +163,24 @@ model = ScoreTransformer(
         device=DEVICE,
         seed=SEED,
         n_ctx=seq_lens.max().item(),
-        attn_only=True,
+        attn_only=ATTN_ONLY,
     ),
     st_cfg=ScoreTransformerConfig(
         first_action_pos=first_action_pos, action_pos_step=action_pos_step
     ),
+)
+
+# Standard test function
+test_inds_small = test_inds[:1000]
+test_func = training.make_standard_test_func(
+    test_data=training.TrainingTensors(
+        inputs=[tokens[test_inds_small], scores[test_inds_small]],
+        output=tokens[test_inds_small, first_action_pos::action_pos_step]
+        .detach()
+        .clone(),
+        loss_mask=loss_mask[test_inds_small],
+    ),
+    test_batch_size=BATCH_SIZE,
 )
 
 # Train!
@@ -180,7 +194,7 @@ results = training.train_custom_transformer(
         weight_decay=WEIGHT_DECAY,
         log_period=LOG_PERIOD,
         seed=SEED,
-        save_results=False,
+        save_results=True,
     ),
     training_data=training.TrainingTensors(
         inputs=[tokens[train_inds], scores[train_inds]],
@@ -189,8 +203,17 @@ results = training.train_custom_transformer(
         .clone(),
         loss_mask=loss_mask[train_inds],
     ),
-    # test_func=test_func,
+    test_func=test_func,
 )
+
+# %%
+# Show training results
+px.line(
+    results.results,
+    x="elapsed_time",
+    y="loss_train",
+    title="Loss",
+).show()
 
 
 # %%

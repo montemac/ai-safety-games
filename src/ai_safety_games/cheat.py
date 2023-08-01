@@ -636,15 +636,20 @@ class CheatGame:
 
 
 def get_seqs_from_state_history(
-    game: CheatGame, vocab: Dict[str, int], state_history: List[CheatState]
+    game: CheatGame,
+    vocab: Dict[str, int],
+    state_history: List[CheatState],
+    players_to_return: Optional[List[int]] = None,
 ) -> Int64[t.Tensor, "batch pos"]:
     """Function to represent a game state history as a batch of token
     sequences, one sequence per game player.
 
     """
-    assert (
-        len(state_history) % game.config.num_players == 0
-    ), "State history length must be a multiple of the number of players"
+    # assert (
+    #     len(state_history) % game.config.num_players == 0
+    # ), "State history length must be a multiple of the number of players"
+    if players_to_return is None:
+        players_to_return = list(range(game.config.num_players))
     # Pull the actions, observed actions, and pile sizes out of the
     # next states so we can iterate over these with the states
     post_state_history = [
@@ -679,7 +684,7 @@ def get_seqs_from_state_history(
     # Iterate over the state history one for each player, with that
     # player as the "active player"
     tokens_all = []
-    for player in range(game.config.num_players):
+    for player in players_to_return:
         # Initialize the tokens with two padding token for each player
         # that won't get a turn before the first turn of the player of
         # interest, so that player actions are always in the same position
@@ -788,7 +793,7 @@ class LiteralCheatPlayer(CheatPlayer):
         return action
 
 
-class ModelCheatPlayer(CheatPlayer):
+class DecisionTransformerCheatPlayer(CheatPlayer):
     """Cheat player that uses a decision transformer model to sample
     the next action."""
 
@@ -847,6 +852,52 @@ class ModelCheatPlayer(CheatPlayer):
         action = dist.sample()
         self.actions[:, self.timestep] = action
         self.timestep += 1
+        return action.item()
+
+
+class ScoreTransformerCheatPlayer(CheatPlayer):
+    """Cheat player that uses a score transformer model to sample
+    the next action."""
+
+    def __init__(
+        self,
+        model: HookedTransformer,
+        vocab: Dict[str, int],
+        goal_score: float,
+        temperature: float = 1.0,
+        seed: int = 0,
+    ):
+        self.model = model
+        self.vocab = vocab
+        self.goal_score = goal_score
+        self.temperature = temperature
+        self.reset(seed=seed)
+
+    def reset(self, seed: Optional[int] = None):
+        """Resets the player, optionally with a new seed."""
+        if seed is not None:
+            self.rng = np.random.default_rng(seed=seed)
+            t.manual_seed(seed)
+
+    def step(self, obs: CheatObs, game: CheatGame) -> ActionId:
+        """Build the tokens tensor from scratch, which is simple but
+        inefficient. TODO: build the sequence turn-by-turn, only
+        incorporating the new information at each call to step."""
+        tokens = get_seqs_from_state_history(
+            game=game,
+            vocab=self.vocab,
+            state_history=game.state_history,
+            players_to_return=[game.state.current_player],
+        ).to(self.model.cfg.device)
+        with t.no_grad():
+            action_logits = self.model(
+                tokens=tokens,
+                scores=t.tensor([self.goal_score]).to(self.model.cfg.device),
+            )
+        dist = t.distributions.Categorical(
+            logits=action_logits[0, -1, :] / self.temperature
+        )
+        action = dist.sample()
         return action.item()
 
 

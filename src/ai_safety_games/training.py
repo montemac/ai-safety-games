@@ -66,6 +66,56 @@ class TrainingResults:
 TestFunc = Callable[[nn.Module, TrainingConfig, int], Dict[str, Any]]
 
 
+def make_standard_test_func(
+    test_data: TrainingTensors, test_batch_size: int
+) -> TestFunc:
+    """Create a standard test function for a decision transformer model
+    given a test dataset and batch size."""
+
+    def test_func(model: nn.Module, config: TrainingConfig, test_idx: int):
+        """Test function for a decision transformer model."""
+        # Create a dataloader for the test set
+        dataset = TensorDataset(
+            *test_data.inputs, test_data.output, test_data.loss_mask
+        )
+        dataloader = DataLoader(
+            dataset, batch_size=test_batch_size, shuffle=False
+        )
+
+        # Initialize variables for logging
+        loss_total = 0
+        loss_cnt = 0
+
+        # Run the test loop
+        with t.no_grad():
+            for batch_idx, test_batch in enumerate(dataloader):
+                # Split into inputs and outputs
+                inputs_batch = test_batch[:-2]
+                output_batch = test_batch[-2]
+                loss_mask_batch = test_batch[-1]
+                batch_size = output_batch.shape[0]
+
+                # Forward pass
+                logits = model(*inputs_batch)
+                loss = model.loss_fn(
+                    logits, output_batch, loss_mask=loss_mask_batch
+                )
+                loss_total += loss.item() * batch_size
+                loss_cnt += batch_size
+
+        # Update training loss
+        loss_test = loss_total / loss_cnt
+
+        # Save training results
+        results_this = {
+            "loss_test": loss_test,
+        }
+
+        return results_this
+
+    return test_func
+
+
 def train_custom_transformer(
     model: HookedTransformer,
     config: TrainingConfig,
@@ -163,13 +213,6 @@ def train_custom_transformer(
 
     training_results = pd.DataFrame(training_results)
 
-    # Create a timestamped output directory
-    output_dir = os.path.join(
-        config.project_name + "_results",
-        datetime.datetime.now().strftime("%Y%m%dT%H%M%S"),
-    )
-    os.makedirs(output_dir, exist_ok=True)
-
     # Store results
     final_results = TrainingResults(
         config=config,
@@ -179,6 +222,13 @@ def train_custom_transformer(
 
     # Save the model and the training results in a pickled dictionary
     if config.save_results:
+        # Create a timestamped output directory
+        output_dir = os.path.join(
+            config.project_name + "_results",
+            datetime.datetime.now().strftime("%Y%m%dT%H%M%S"),
+        )
+        os.makedirs(output_dir, exist_ok=True)
+
         with open(os.path.join(output_dir, "results.pkl"), "wb") as file:
             pickle.dump(
                 asdict(final_results),
