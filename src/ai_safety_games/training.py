@@ -180,6 +180,9 @@ def train_custom_transformer(
             # Calculate elapsed time and update progress bar
             elapsed_mins = (time.time() - start_time) / 60
             progress_bar.update(elapsed_mins - progress_bar.n)
+            if elapsed_mins >= config.training_mins:
+                progress_bar.close()
+                break
 
             # Determine whether to run tests and log results
             since_last_log += batch_size

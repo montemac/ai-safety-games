@@ -150,7 +150,7 @@ class ScoreTransformer(HookedTransformer):
         assert tokens.shape[1] <= self.cfg.n_ctx, "Input sequence too long!"
         # Embed the RSA inputs
         embeddings = self.token_embed(tokens) + self.pos_embed_copy(tokens)
-        embeddings[:, 0, :] += self.score_embed(scores)
+        embeddings[:, 1, :] += self.score_embed(scores)
         # Run the HookedTransformer forward pass
         return super().forward(
             embeddings,

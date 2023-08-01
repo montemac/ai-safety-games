@@ -623,7 +623,7 @@ class CheatGame:
             ]
         )
         # Special tokens (padding, beginning, end of game)
-        token_strs.extend(["PAD", "BOG", "EOG"])
+        token_strs.extend(["SCORE", "PAD", "BOG", "EOG"])
         # Enumerate and return
         vocab = {token_str: idx for idx, token_str in enumerate(token_strs)}
         player_action_vocab = {
@@ -688,7 +688,7 @@ def get_seqs_from_state_history(
         # Initialize the tokens with two padding token for each player
         # that won't get a turn before the first turn of the player of
         # interest, so that player actions are always in the same position
-        tokens = ["BOG"] + ["PAD"] * 2 * (
+        tokens = ["BOG", "SCORE"] + ["PAD"] * 2 * (
             (
                 state_history[0].current_player
                 - player

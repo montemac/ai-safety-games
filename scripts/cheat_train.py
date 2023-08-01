@@ -29,6 +29,8 @@ from ai_safety_games.ScoreTransformer import (
 
 utils.enable_ipython_reload()
 
+_ = t.set_grad_enabled(True)
+
 # %%
 # Load a dataset into memory
 FOLDER = "../datasets/random_dataset_20230731T001342"
@@ -93,7 +95,7 @@ seq_lens = t.tensor([len(toks) for toks in tokens_list], dtype=t.int64).to(
 
 # Positions corresponding to actions
 first_action_pos = (
-    (game_config.num_players - 1) * 2 + 1 + game.config.num_ranks
+    (game_config.num_players - 1) * 2 + 2 + game.config.num_ranks
 )
 action_pos_step = game_config.num_players * 2 + game.config.num_ranks
 
@@ -130,7 +132,7 @@ loss_mask = loss_mask[:, first_action_pos::action_pos_step]
 
 # %%
 # Training loop using library function
-TRAINING_MINS = 7
+TRAINING_MINS = 1
 BATCH_SIZE = 100
 LOG_PERIOD = 10000
 N_LAYERS = 4
@@ -138,7 +140,7 @@ D_MODEL = 128
 D_HEAD = 16
 ATTN_ONLY = False
 LR = 0.001
-WEIGHT_DECAY = 0.01
+WEIGHT_DECAY = 0.00
 SEED = 0
 
 # Split data into train and test sets
@@ -208,11 +210,18 @@ results = training.train_custom_transformer(
 
 # %%
 # Show training results
+plot_df = results.results.melt(
+    id_vars=["elapsed_time"],
+    value_vars=["loss_train", "loss_test"],
+    var_name="loss_type",
+    value_name="loss",
+)
 px.line(
-    results.results,
+    plot_df,
     x="elapsed_time",
-    y="loss_train",
-    title="Loss",
+    y="loss",
+    color="loss_type",
+    title="Training loss",
 ).show()
 
 
