@@ -8,7 +8,7 @@ import glob
 import os
 
 # TEMP
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 import numpy as np
 import pandas as pd
@@ -116,7 +116,8 @@ mean_margins_by_player = all_margins.groupby("player").mean()
 # Run a bunch of different games with random opponents, see how the
 # model performs
 GAMES_PER_SCORE = 100
-GOAL_SCORES = np.arange(-4, 4)
+# GOAL_SCORES = np.arange(-4, 4)
+GOAL_SCORES = np.array([2])
 SEED = 0
 NO_XRAY_OPP = True
 
@@ -252,6 +253,10 @@ fig.show()
 
 
 # %%
+# Show a few test game histories
+
+
+# %%
 
 # PROBS_TABLE = pd.DataFrame(
 #     {
@@ -331,7 +336,8 @@ fig.show()
 results_list = []
 # for goal_rtg in tqdm(range(-20, 2, 2)):
 # for goal_rtg in tqdm([-20, -10, 0, 10]):
-for goal_rtg in tqdm([-1, 0, 2, 5, 10, 20]):
+# for goal_rtg in tqdm([-1, 0, 2, 5, 10, 20]):
+for goal_rtg in tqdm([5]):
     # for goal_rtg in [5]:
     players = [
         cheat.ModelCheatPlayer(model=model, goal_rtg=goal_rtg),

@@ -634,6 +634,58 @@ class CheatGame:
         }
         return vocab, player_action_vocab
 
+    def print_state_history(self):
+        """Visualize the state history of the game for diagnostics and
+        debugging."""
+
+        def highlight(string):
+            """Highlight a string using ANSI codes"""
+            return f"\x1b[30m\x1b[47m{string}\x1b[0m"
+
+        def red(string):
+            """Make a string red using ANSI codes"""
+            return f"\x1b[31m{string}\x1b[0m"
+
+        def green(string):
+            """Make a string green using ANSI codes"""
+            return f"\x1b[32m{string}\x1b[0m"
+
+        def blue(string):
+            """Make a string blue using ANSI codes"""
+            return f"\x1b[34m{string}\x1b[0m"
+
+        # Iterate over the state history, printing one row per turn
+        rows = []
+        for turn, state in enumerate(self.state_history):
+            row = ""
+            # Turn number
+            row += f"{turn:3d}: "
+            # Numbers of cards in each players hand, with the current
+            # player highlighted using ANSI codes
+            for player, hand in enumerate(state.hands):
+                hand_size = f"{len(hand):2d} "
+                row += (
+                    highlight(hand_size)
+                    if player == state.current_player
+                    else hand_size
+                )
+            row += "| "
+            # Number of cards of each rank in the current player's hand,
+            # with zeros indicated using a dash
+            for rank in range(self.config.num_ranks):
+                num_cards = sum(
+                    card.rank == rank
+                    for card in state.hands[state.current_player]
+                )
+                row += f"{num_cards:2d} " if num_cards > 0 else "-- "
+            row += "| "
+            # Current claimed rank
+            row += f"{state.last_claimed_rank:2d} | "
+            #
+
+            rows.append(row)
+        return "\n".join(rows)
+
 
 def get_seqs_from_state_history(
     game: CheatGame,
@@ -645,6 +697,7 @@ def get_seqs_from_state_history(
     sequences, one sequence per game player.
 
     """
+    # TODO: this should just be a method on CheatGame
     # assert (
     #     len(state_history) % game.config.num_players == 0
     # ), "State history length must be a multiple of the number of players"
