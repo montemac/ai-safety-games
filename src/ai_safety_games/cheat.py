@@ -634,42 +634,65 @@ class CheatGame:
         }
         return vocab, player_action_vocab
 
-    def print_state_history(self):
+    def get_actions_from_state_history(self):
+        """Return the actions extracted fromt the state history.  The
+        state history stores the previous action, so well get N-1
+        actions. We pad it out with a pass so that we end up with the
+        same number of actions as states."""
+        return [
+            state.prev_player_action for state in self.state_history[1:]
+        ] + [self.action_ids["pass"]]
+
+    def print_state_history(self, player_of_interest: int = 0):
         """Visualize the state history of the game for diagnostics and
         debugging."""
 
-        def highlight(string):
-            """Highlight a string using ANSI codes"""
-            return f"\x1b[30m\x1b[47m{string}\x1b[0m"
+        def ansi_colors(string, fg=None, bg=None):
+            """Wrap a string in ANSI color codes"""
+            COLORS = {
+                "black": {"fg": 30, "bg": 40},
+                "red": {"fg": 31, "bg": 41},
+                "green": {"fg": 32, "bg": 42},
+                "yellow": {"fg": 33, "bg": 43},
+                "blue": {"fg": 34, "bg": 44},
+                "magenta": {"fg": 35, "bg": 45},
+                "cyan": {"fg": 36, "bg": 46},
+                "white": {"fg": 37, "bg": 47},
+            }
+            fg = COLORS[fg]["fg"] if fg is not None else ""
+            bg = COLORS[bg]["bg"] if bg is not None else ""
+            return f"\x1b[{fg};{bg}m{string}\x1b[0m"
 
-        def red(string):
-            """Make a string red using ANSI codes"""
-            return f"\x1b[31m{string}\x1b[0m"
-
-        def green(string):
-            """Make a string green using ANSI codes"""
-            return f"\x1b[32m{string}\x1b[0m"
-
-        def blue(string):
-            """Make a string blue using ANSI codes"""
-            return f"\x1b[34m{string}\x1b[0m"
+        # Get action history
+        action_history = self.get_actions_from_state_history()
+        prev_actions = [None] + action_history[:-1]
 
         # Iterate over the state history, printing one row per turn
         rows = []
-        for turn, state in enumerate(self.state_history):
+        for turn, (state, action, prev_action) in enumerate(
+            zip(self.state_history, action_history, prev_actions)
+        ):
             row = ""
-            # Turn number
-            row += f"{turn:3d}: "
+            # Turn number, highlighted if it's the player of interest's
+            # turn
+            turn_str = f"{turn:3d}: "
+            row += (
+                ansi_colors(turn_str, fg="black", bg="white")
+                if (state.current_player == player_of_interest)
+                else turn_str
+            )
             # Numbers of cards in each players hand, with the current
             # player highlighted using ANSI codes
             for player, hand in enumerate(state.hands):
                 hand_size = f"{len(hand):2d} "
                 row += (
-                    highlight(hand_size)
+                    ansi_colors(hand_size, fg="black", bg="white")
                     if player == state.current_player
                     else hand_size
                 )
             row += "| "
+            # Number of cards in the pile
+            row += f"{len(state.pile):2d} | "
             # Number of cards of each rank in the current player's hand,
             # with zeros indicated using a dash
             for rank in range(self.config.num_ranks):
@@ -677,11 +700,59 @@ class CheatGame:
                     card.rank == rank
                     for card in state.hands[state.current_player]
                 )
-                row += f"{num_cards:2d} " if num_cards > 0 else "-- "
+                row += (
+                    f"{rank:1d}:{num_cards:1d} " if num_cards > 0 else f"-   "
+                )
             row += "| "
             # Current claimed rank
-            row += f"{state.last_claimed_rank:2d} | "
-            #
+            row += (
+                f"{state.last_claimed_rank:2d} | "
+                if state.last_claimed_rank is not None
+                else "-- | "
+            )
+            # Print the action, coloring appropriately
+            # Normal play is white, claiming a card that's not allowed
+            # or playing a card not in the player's hand is red,
+            # cheating is yellow, successful call is cyan, failed call
+            # is magenta, ignored call is white, pass is blue.  All on
+            # black background.
+            action_s = self.action_meanings[action]
+            if action_s == "pass":
+                row += ansi_colors(action_s, fg="blue")
+            else:
+                (
+                    claim_rank,
+                    play_rank,
+                    is_call,
+                ) = self.get_fields_from_play_card_action(action_s)
+                if not is_call and claim_rank not in state.allowed_next_ranks:
+                    row += ansi_colors(action_s, fg="red")
+                elif play_rank not in self.get_ranks_in_hand(
+                    state.hands[state.current_player]
+                ):
+                    row += ansi_colors(action_s, fg="red")
+                elif is_call:
+                    prev_action_s = self.action_meanings.get(
+                        prev_action, "pass"
+                    )
+                    if prev_action_s == "pass":
+                        row += ansi_colors(action_s, fg="white")
+                    else:
+                        (
+                            prev_claim,
+                            prev_play,
+                            _,
+                        ) = self.get_fields_from_play_card_action(
+                            prev_action_s
+                        )
+                        if prev_play == prev_claim:
+                            row += ansi_colors(action_s, fg="magenta")
+                        else:
+                            row += ansi_colors(action_s, fg="cyan")
+                elif claim_rank != play_rank:
+                    row += ansi_colors(action_s, fg="black", bg="yellow")
+                else:
+                    row += ansi_colors(action_s, fg="white")
 
             rows.append(row)
         return "\n".join(rows)

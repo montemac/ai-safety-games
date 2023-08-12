@@ -254,6 +254,16 @@ fig.show()
 
 # %%
 # Show a few test game histories
+SEED = 4
+scores, winning_player, turn_cnt = cheat.run(
+    game=game,
+    players=players,
+    max_turns=max(summary_lists["turn_cnt"]) + 1,
+    seed=SEED,
+)
+print(game.print_state_history())
+margins = scores_to_margins(scores)
+print(margins)
 
 
 # %%
