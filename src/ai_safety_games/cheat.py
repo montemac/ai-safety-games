@@ -716,6 +716,9 @@ class CheatGame:
             # cheating is yellow, successful call is cyan, failed call
             # is magenta, ignored call is white, pass is blue.  All on
             # black background.
+            # Print a star first if this is the player of interest's
+            # turn just for visual clarity
+            row += "* " if state.current_player == player_of_interest else "  "
             action_s = self.action_meanings[action]
             if action_s == "pass":
                 row += ansi_colors(action_s, fg="blue")
