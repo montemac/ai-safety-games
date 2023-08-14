@@ -336,6 +336,15 @@ class CheatGame:
         if self.config.verbose:
             print(*args, **kwargs)
 
+    def last_player_cheated(self) -> bool:
+        """Convenience function for special players that need to access
+        this information."""
+        return (
+            self.state.prev_player_obs_action != self.obs_action_ids["pass"]
+            and len(self.state.pile) > 0
+            and self.state.last_claimed_rank != self.state.pile[-1].rank
+        )
+
     def step(self, action: Union[int, str]) -> StepReturn:
         """Take an action on behalf of the current player, update the
         game state, and return the next player index and observation."""
@@ -1123,11 +1132,7 @@ class XRayCheatPlayer(RandomCheatPlayer):
         # Previous player cheated if they didn't pass, the pile isn't
         # empty, and the card the previous player claimed is not the top
         # card in the pile
-        prev_player_cheated = (
-            obs.prev_player_obs_action != game.obs_action_ids["pass"]
-            and obs.num_in_pile > 0
-            and obs.last_claimed_rank != game.state.pile[-1].rank
-        )
+        prev_player_cheated = game.last_player_cheated()
         # Update the probability table
         if prev_player_cheated:
             self.probs_table["can_play"] = [0, 1, 0, 0]
@@ -1147,10 +1152,15 @@ class AdaptiveCheatPlayer(RandomCheatPlayer):
     """
 
     def __init__(
-        self, max_call_prob: float, max_cheat_prob: float, seed: int = 0
+        self,
+        max_call_prob: float,
+        max_cheat_prob: float,
+        seed: int = 0,
+        is_xray: bool = False,
     ):
         self.max_call_prob = max_call_prob
         self.max_cheat_prob = max_cheat_prob
+        self.is_xray = is_xray
         # Start with a naive player, will be adapted each step
         probs_table = pd.DataFrame(
             {"can_play": [0, 0, 0, 1], "cannot_play": [1, 0, 0, 0]},
@@ -1187,23 +1197,31 @@ class AdaptiveCheatPlayer(RandomCheatPlayer):
         ):
             call_prob = 0.0
         else:
-            # We can call, so check if all the instances of the last
-            # claimed card are in our hand
-            num_in_hand_matching_claim = len(
-                [
-                    card
-                    for card in obs.cards_in_hand
-                    if card.rank == obs.last_claimed_rank
-                ]
-            )
-            if num_in_hand_matching_claim == game.config.num_suits:
-                call_prob = 1.0
+            # We can call, so check if we have x-ray powers and the last
+            # play was a cheat
+            if self.is_xray:
+                if game.last_player_cheated():
+                    call_prob = 1.0
+                else:
+                    call_prob = 0.0
             else:
-                # We shouldn't definitely call, so calculate an
-                # approximate probability
-                call_prob = self.max_call_prob * (
-                    1 - (obs.num_in_other_hands[0] / deck_size)
-                ) ** (game.config.num_suits - num_in_hand_matching_claim)
+                # Check if all the instances of the last claimed card
+                # are in our hand 
+                num_in_hand_matching_claim = len(
+                    [
+                        card
+                        for card in obs.cards_in_hand
+                        if card.rank == obs.last_claimed_rank
+                    ]
+                )
+                if num_in_hand_matching_claim == game.config.num_suits:
+                    call_prob = 1.0
+                else:
+                    # We shouldn't definitely call, so calculate an
+                    # approximate probability
+                    call_prob = self.max_call_prob * (
+                        1 - (obs.num_in_other_hands[0] / deck_size)
+                    ) ** (game.config.num_suits - num_in_hand_matching_claim)
         # Calculate the cheat probability based on the size of the pile
         cheat_prob = self.max_cheat_prob * (1 - (obs.num_in_pile / deck_size))
         # Update the probability table
