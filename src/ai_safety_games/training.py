@@ -144,6 +144,11 @@ def train_custom_transformer(
         dataset, batch_size=config.batch_size, shuffle=True
     )
 
+    # TODO: add more complex LR scheduling, and go back to training for
+    # a specific number of epochs (or batches) so that these schedules
+    # can be used sensibly?
+    # https://huggingface.co/docs/transformers/main_classes/optimizer_schedules
+
     # Initialize variables for logging
     training_results = []
     start_time = time.time()
