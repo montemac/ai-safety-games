@@ -16,7 +16,7 @@ import torch as t
 from tqdm.auto import tqdm
 import plotly.express as px
 
-from ai_safety_games import cheat, utils, training
+from ai_safety_games import cheat, utils, training, cheat_utils
 from ai_safety_games.ScoreTransformer import ScoreTransformer
 
 utils.enable_ipython_reload()
@@ -28,8 +28,6 @@ _ = t.set_grad_enabled(False)
 # %%
 # Load some stuff about the dataset, and the model to test
 
-# New embedding scheme
-DATASET_FOLDER = "../datasets/random_dataset_20230731T001342"
 # 4L attn-only model
 # TRAINING_RESULTS_FN = "cheat_results/20230801T095350/results.pkl"
 # 1L attn-only model
@@ -39,12 +37,19 @@ DATASET_FOLDER = "../datasets/random_dataset_20230731T001342"
 # 4L full model, separate score and BOG embeddings
 # TRAINING_RESULTS_FN = "cheat_results/20230801T123246/results.pkl"
 # 8L full model, separate score and BOG embeddings
-TRAINING_RESULTS_FN = "cheat_results/20230801T130838/results.pkl"
+# TRAINING_RESULTS_FN = "cheat_results/20230801T130838/results.pkl"
+TRAINING_RESULTS_FN = "cheat_train_results/20230815T153630/results.pkl"
 
 # Load model
+
+# TODO: fix this problem with loading models!
+# AttributeError: Can't get attribute 'game_filter' on
+
 with open(TRAINING_RESULTS_FN, "rb") as file:
-    results = training.TrainingResults(**pickle.load(file))
-    model = results.model
+    results_all = pickle.load(file)
+config = cheat_utils.CheatTrainingConfig(**results_all["config"])
+results = training.TrainingResults(**results_all["training_results"])
+model = results.model
 
 # Create a model description using fields from model.cfg.
 # Fields: n_layers, d_model, d_head, n_ctx, attn_only
@@ -58,7 +63,7 @@ model_desc = (
 
 # Load data from training dataset for reference, including players and
 # summary data from games
-with open(os.path.join(DATASET_FOLDER, "config.pkl"), "rb") as file:
+with open(os.path.join(config.dataset_folder, "config.pkl"), "rb") as file:
     config_dict = pickle.load(file)
     game_config = cheat.CheatConfig(**config_dict["game.config"])
     # Load players (don't save classes in case they have changed a bit
@@ -78,8 +83,9 @@ with open(os.path.join(DATASET_FOLDER, "config.pkl"), "rb") as file:
                 max_cheat_prob=player_vars["max_cheat_prob"],
             )
         players_all.append(player)
-with open(os.path.join(DATASET_FOLDER, "summary.pkl"), "rb") as file:
-    summary_lists = pickle.load(file)
+
+# with open(os.path.join(config.dataset_folder, "summary.pkl"), "rb") as file:
+#     summary_lists = pickle.load(file)
 
 
 # Utility function
@@ -96,15 +102,16 @@ def scores_to_margins(scores):
 
 
 # Print some stats about players
-margins_for_games = [
-    dict(zip(scores.keys(), scores_to_margins(scores.values())))
-    for scores in summary_lists["scores"]
-]
-all_margins = pd.DataFrame(
-    [item for margins in margins_for_games for item in list(margins.items())],
-    columns=["player", "margin"],
-)
-mean_margins_by_player = all_margins.groupby("player").mean()
+# margins_for_games = [
+#     dict(zip(scores.keys(), scores_to_margins(scores.values())))
+#     for scores in summary_lists["scores"]
+# ]
+# all_margins = pd.DataFrame(
+#     [item for margins in margins_for_games for item in list(margins.items())],
+#     columns=["player", "margin"],
+# )
+# mean_margins_by_player = all_margins.groupby("player").mean()
+
 # px.ecdf(mean_margins_by_player, title="CDF of mean margins by player").show()
 # px.histogram(
 #     all_margins["margin"], title="Histogram of margins in training data"

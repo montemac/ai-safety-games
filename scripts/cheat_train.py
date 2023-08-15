@@ -1,55 +1,81 @@
 # %%
 # Imports, etc
 from typing import Dict, List, Any
+
+import torch as t
 import plotly.express as px
 
-from ai_safety_games import cheat_utils
+from ai_safety_games import cheat_utils, utils
+
+utils.enable_ipython_reload()
+
+_ = t.set_grad_enabled(True)
+
 
 # %%
 # Pre-init the cached game data
-cached_game_data = None
+# DATASET_FOLDER = "../datasets/random_dataset_20230731T001342"
+DATASET_FOLDER = "../datasets/random_dataset_20230814T133939"
+DEVICE = "cuda:0"
+
+# This setup will only load training data for players that never call,
+# so we'd expect that cheating constantly would be optimal?
+INCLIDED_PLAYERS = [0, 2, 3]
+
+
+def game_filter(summary_lists: Dict[str, List[Any]]) -> List[int]:
+    """Filter out games that don't match criteria"""
+    inds = []
+    for idx, player_inds in enumerate(summary_lists["player_indices"]):
+        if all([player_ind in INCLIDED_PLAYERS for player_ind in player_inds]):
+            inds.append(idx)
+    return inds
+
+
+game_data = cheat_utils.load_game_data(
+    dataset_folder=DATASET_FOLDER, game_filter=game_filter, device=DEVICE
+)
 
 
 # %%
 # Train using new high-level function
-def game_filter(summary_lists: Dict[str, List[Any]]) -> List[int]:
-    return list(range(200000))
 
 
 results, cached_game_data = cheat_utils.train(
     cheat_utils.CheatTrainingConfig(
-        dataset_folder="../datasets/random_dataset_20230731T001342",
+        dataset_folder=DATASET_FOLDER,
         game_filter=game_filter,
-        cached_game_data=cached_game_data,
+        device=DEVICE,
+        cached_game_data=game_data,
         train_fraction=0.99,
         n_layers=1,
         d_model=128,
         d_head=16,
         attn_only=True,
-        device="cuda:0",
-        training_mins=3,
-        batch_size=100,
+        epochs=2,
+        batch_size=1000,
         lr=0.001,
-        lr_schedule="",
+        # lr_schedule=("cosine_with_warmup", {"warmup_fraction": 0.05}),
+        lr_schedule=None,
         weight_decay=0,
-        log_period=10000,
+        log_period=50000,
         seed=0,
+        test_player_inds=INCLIDED_PLAYERS,
+        test_goal_scores=[2, 5],
     )
 )
 
 # %%
 # Show training results
-plot_df = results.results.melt(
-    id_vars=["elapsed_time"],
-    value_vars=["loss_train", "loss_test"],
-    var_name="loss_type",
-    value_name="loss",
-)
 px.line(
-    plot_df,
-    x="elapsed_time",
-    y="loss",
-    color="loss_type",
+    results.results,
+    x="batch",
+    y=[
+        "loss_train",
+        "loss_test",
+        "test_margin_mean_goal_2",
+        "test_margin_mean_goal_5",
+    ],
     title="Training loss",
 ).show()
 
