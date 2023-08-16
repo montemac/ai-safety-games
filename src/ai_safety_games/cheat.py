@@ -1030,10 +1030,13 @@ class ScoreTransformerCheatPlayer(CheatPlayer):
                 tokens=tokens,
                 scores=t.tensor([self.goal_score]).to(self.model.cfg.device),
             )
-        dist = t.distributions.Categorical(
-            logits=action_logits[0, -1, :] / self.temperature
-        )
-        action = dist.sample()
+        if self.temperature == 0:
+            action = t.argmax(action_logits[0, -1, :])
+        else:
+            dist = t.distributions.Categorical(
+                logits=action_logits[0, -1, :] / self.temperature
+            )
+            action = dist.sample()
         return action.item()
 
 
@@ -1206,7 +1209,7 @@ class AdaptiveCheatPlayer(RandomCheatPlayer):
                     call_prob = 0.0
             else:
                 # Check if all the instances of the last claimed card
-                # are in our hand 
+                # are in our hand
                 num_in_hand_matching_claim = len(
                     [
                         card
@@ -1214,7 +1217,12 @@ class AdaptiveCheatPlayer(RandomCheatPlayer):
                         if card.rank == obs.last_claimed_rank
                     ]
                 )
-                if num_in_hand_matching_claim == game.config.num_suits:
+                # Note: a max_call_prob of exactly zero will prevent
+                # even definite calls
+                if (
+                    num_in_hand_matching_claim == game.config.num_suits
+                    and self.max_call_prob != 0.0
+                ):
                     call_prob = 1.0
                 else:
                     # We shouldn't definitely call, so calculate an

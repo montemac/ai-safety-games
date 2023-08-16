@@ -37,8 +37,8 @@ class CheatTrainingConfig:
 
     dataset_folder: str
     device: str
+    sequence_mode: str = ("tokens_score",)
     game_filter: Optional[Callable[Dict[str, List[Any]], List[int]]] = None
-    embedding_type: str = "tokens"  # TODO: implement this?
     cached_game_data: Optional[TokenizedGames] = None
     train_fraction: float
     n_layers: int
@@ -60,6 +60,7 @@ class CheatTrainingConfig:
 def load_game_data(
     dataset_folder: str,
     device: str,
+    sequence_mode: str,
     game_filter: Optional[Callable[Dict[str, List[Any]], List[int]]] = None,
 ) -> TokenizedGames:
     """Load game data from disk, and optinoally filter."""
@@ -93,6 +94,10 @@ def load_game_data(
     )
     action_pos_step = game_config.num_players * 2 + game.config.num_ranks
 
+    # Sequence creation options
+    # TODO: use turns_mode
+    turns_mode, score_mode = sequence_mode.split("_")
+
     # Load games and convert to token tensors plus scores
     tokens_list = []
     scores_list = []
@@ -109,9 +114,13 @@ def load_game_data(
             hand_sizes = np.array(
                 [len(hand) for hand in state_history[-1].hands]
             )
-            scores = -hand_sizes
-            next_best_score = np.max(scores[scores != 0])
-            scores[scores == 0] = -next_best_score
+            if score_mode == "score":
+                scores = -hand_sizes
+                next_best_score = np.max(scores[scores != 0])
+                scores[scores == 0] = -next_best_score
+            elif score_mode == "win":
+                scores = np.zeros(game_config.num_players)
+                scores[hand_sizes.argmin()] = 1
             # Get token sequences
             tokens_this = cheat.get_seqs_from_state_history(
                 game=game, vocab=vocab, state_history=state_history
@@ -251,6 +260,7 @@ def train(config: CheatTrainingConfig):
     )
 
     parent_config = config
+    _, score_mode = parent_config.sequence_mode.split("_")
 
     def test_func(
         model: nn.Module, config: training.TrainingConfig, test_idx: int
@@ -274,6 +284,8 @@ def train(config: CheatTrainingConfig):
                 players=test_players,
                 seed=parent_config.seed,
             )
+            if score_mode == "win":
+                test_margins = test_margins > 0
             test_results[f"test_margin_mean_goal_{goal_score}"] = np.mean(
                 test_margins
             )

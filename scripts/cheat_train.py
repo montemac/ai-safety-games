@@ -17,6 +17,7 @@ _ = t.set_grad_enabled(True)
 # DATASET_FOLDER = "../datasets/random_dataset_20230731T001342"
 DATASET_FOLDER = "../datasets/random_dataset_20230814T133939"
 DEVICE = "cuda:0"
+SEQUENCE_MODE = "tokens_win"
 
 # This setup will only load training data for players that never call,
 # so we'd expect that cheating constantly would be optimal?
@@ -33,7 +34,10 @@ def game_filter(summary_lists: Dict[str, List[Any]]) -> List[int]:
 
 
 game_data = cheat_utils.load_game_data(
-    dataset_folder=DATASET_FOLDER, game_filter=game_filter, device=DEVICE
+    dataset_folder=DATASET_FOLDER,
+    sequence_mode=SEQUENCE_MODE,
+    game_filter=game_filter,
+    device=DEVICE,
 )
 
 
@@ -44,6 +48,7 @@ game_data = cheat_utils.load_game_data(
 results, cached_game_data = cheat_utils.train(
     cheat_utils.CheatTrainingConfig(
         dataset_folder=DATASET_FOLDER,
+        sequence_mode=SEQUENCE_MODE,
         game_filter=game_filter,
         device=DEVICE,
         cached_game_data=game_data,
@@ -52,7 +57,7 @@ results, cached_game_data = cheat_utils.train(
         d_model=128,
         d_head=16,
         attn_only=True,
-        epochs=2,
+        epochs=3,
         batch_size=1000,
         lr=0.001,
         # lr_schedule=("cosine_with_warmup", {"warmup_fraction": 0.05}),
@@ -61,7 +66,7 @@ results, cached_game_data = cheat_utils.train(
         log_period=50000,
         seed=0,
         test_player_inds=INCLIDED_PLAYERS,
-        test_goal_scores=[2, 5],
+        test_goal_scores=[1],
     )
 )
 
@@ -73,8 +78,8 @@ px.line(
     y=[
         "loss_train",
         "loss_test",
-        "test_margin_mean_goal_2",
-        "test_margin_mean_goal_5",
+        "test_margin_mean_goal_1",
+        # "test_margin_mean_goal_5",
     ],
     title="Training loss",
 ).show()

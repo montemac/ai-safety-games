@@ -38,12 +38,17 @@ _ = t.set_grad_enabled(False)
 # TRAINING_RESULTS_FN = "cheat_results/20230801T123246/results.pkl"
 # 8L full model, separate score and BOG embeddings
 # TRAINING_RESULTS_FN = "cheat_results/20230801T130838/results.pkl"
-TRAINING_RESULTS_FN = "cheat_train_results/20230815T153630/results.pkl"
+#
+# TRAINING_RESULTS_FN = "cheat_train_results/20230815T153630/results.pkl"
+# Trained on win only
+TRAINING_RESULTS_FN = "cheat_train_results/20230815T234841/results.pkl"
+
 
 # Load model
 
 # TODO: fix this problem with loading models!
 # AttributeError: Can't get attribute 'game_filter' on
+game_filter = None
 
 with open(TRAINING_RESULTS_FN, "rb") as file:
     results_all = pickle.load(file)
@@ -123,15 +128,15 @@ def scores_to_margins(scores):
 # Run a bunch of different games with random opponents, see how the
 # model performs
 GAMES_PER_SCORE = 100
-# GOAL_SCORES = np.arange(-4, 4)
-GOAL_SCORES = np.array([2])
+# GOAL_SCORES = np.arange(-2, 5, 1)
+GOAL_SCORES = np.array([0, 1])
 SEED = 0
-NO_XRAY_OPP = True
 
 # Use this to generate random stuff and sub-seeds for games
 rng = np.random.default_rng(seed=SEED)
 
 results_list = []
+opp_margins = []
 game_pbar = tqdm(total=GAMES_PER_SCORE)
 for goal_score in tqdm(GOAL_SCORES):
     for game_idx in range(GAMES_PER_SCORE):
@@ -140,30 +145,59 @@ for goal_score in tqdm(GOAL_SCORES):
         vocab, _ = game.get_token_vocab()
 
         # Players to choose from
-        if NO_XRAY_OPP:
-            players_can_use = [
-                player
-                for player in players_all
-                if not isinstance(player, cheat.XRayCheatPlayer)
-            ]
-        else:
-            players_can_use = players_all
+        # if NO_XRAY_OPP:
+        #     players_can_use = [
+        #         player
+        #         for player in players_all
+        #         if not isinstance(player, cheat.XRayCheatPlayer)
+        #     ]
+        # else:
+        #     players_can_use = players_all
+        players_can_use = [players_all[idx] for idx in [0, 2, 3]]
+        # + [
+        #     cheat.RandomCheatPlayer(
+        #         probs_table=pd.DataFrame(
+        #             {
+        #                 "can_play": {
+        #                     "pass": 0.0,
+        #                     "call": 0.0,
+        #                     "cheat": 0.0,
+        #                     "play": 1.0,
+        #                 },
+        #                 "cannot_play": {
+        #                     "pass": 0.0,
+        #                     "call": 0.0,
+        #                     "cheat": 1.0,
+        #                     "play": 0.0,
+        #                 },
+        #             }
+        #         )
+        #     ),
+        # ]
 
         # Create a list of players with the model-based player in the first
         # position, then two other randomly-selected players
+        player_inds_this = rng.choice(
+            len(players_can_use), size=2, replace=True
+        )
         players = [
             cheat.ScoreTransformerCheatPlayer(
-                model=model, vocab=vocab, goal_score=goal_score
+                model=model,
+                vocab=vocab,
+                goal_score=goal_score,
+                temperature=0,
             ),
-            *rng.choice(players_can_use, size=2, replace=True),
+            *[players_can_use[idx] for idx in player_inds_this],
         ]
 
         # Run the game
+        seed = rng.integers(1e6)
         scores, winning_player, turn_cnt = cheat.run(
             game=game,
             players=players,
-            max_turns=max(summary_lists["turn_cnt"]) + 1,
-            seed=rng.integers(1e6),
+            # max_turns=max(summary_lists["turn_cnt"]) + 1,
+            max_turns=40,
+            seed=seed,
         )
 
         # Calculate victory margins
@@ -173,14 +207,27 @@ for goal_score in tqdm(GOAL_SCORES):
             "goal_score": goal_score,
             "game_idx": game_idx,
             "model_margin": margins[0],
+            "seed": seed,
+            "player_inds_this": player_inds_this,
         }
         results_list.append(results)
+
+        for player_idx, opp_idx in enumerate(player_inds_this):
+            opp_margins.append(
+                {
+                    "goal_score": goal_score,
+                    "game_idx": game_idx,
+                    "opp_idx": opp_idx,
+                    "opp_margin": margins[1 + player_idx],
+                }
+            )
 
         game_pbar.update(1)
     game_pbar.reset()
 game_pbar.close()
 
 results_df = pd.DataFrame(results_list)
+opp_margins_df = pd.DataFrame(opp_margins)
 
 # %%
 # Plot and analyze the results
@@ -223,6 +270,8 @@ fig.update_layout(
 )
 fig.show()
 
+print(opp_margins_df.groupby(["goal_score", "opp_idx"])["opp_margin"].mean())
+print(mean_margin)
 
 # # Show histograms of margin for model in certain RTG range, and for
 # # top-K players that span similar mean margins
@@ -261,12 +310,23 @@ fig.show()
 
 # %%
 # Show a few test game histories
-SEED = 4
+result_idx = -10
 scores, winning_player, turn_cnt = cheat.run(
     game=game,
-    players=players,
-    max_turns=max(summary_lists["turn_cnt"]) + 1,
-    seed=SEED,
+    players=[
+        cheat.ScoreTransformerCheatPlayer(
+            model=model,
+            vocab=vocab,
+            goal_score=results_df.iloc[result_idx]["goal_score"],
+            temperature=0,
+        ),
+        *[
+            players_can_use[idx]
+            for idx in results_df.iloc[result_idx]["player_inds_this"]
+        ],
+    ],
+    max_turns=40,
+    seed=results_df.iloc[result_idx]["seed"],
 )
 print(game.print_state_history())
 margins = scores_to_margins(scores)

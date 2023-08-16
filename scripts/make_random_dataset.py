@@ -40,13 +40,13 @@ PLAYER_SETUP = [
         1.0,
     ),
     # Mild adaptive cheater, never calls
-    (
-        cheat.AdaptiveCheatPlayer(
-            max_call_prob=0.0,
-            max_cheat_prob=0.25,
-        ),
-        1.0,
-    ),
+    # (
+    #     cheat.AdaptiveCheatPlayer(
+    #         max_call_prob=0.0,
+    #         max_cheat_prob=0.25,
+    #     ),
+    #     1.0,
+    # ),
     # Heavy adaptive cheater, never calls
     (
         cheat.AdaptiveCheatPlayer(
@@ -56,13 +56,13 @@ PLAYER_SETUP = [
         1.0,
     ),
     # Mild adaptive cheater, sometimes calls
-    (
-        cheat.AdaptiveCheatPlayer(
-            max_call_prob=0.25,
-            max_cheat_prob=0.25,
-        ),
-        1.0,
-    ),
+    # (
+    #     cheat.AdaptiveCheatPlayer(
+    #         max_call_prob=0.25,
+    #         max_cheat_prob=0.25,
+    #     ),
+    #     1.0,
+    # ),
     # Heavy adaptive cheater, sometimes calls
     (
         cheat.AdaptiveCheatPlayer(
@@ -72,14 +72,14 @@ PLAYER_SETUP = [
         1.0,
     ),
     # Mild adaptive cheater, x-ray
-    (
-        cheat.AdaptiveCheatPlayer(
-            max_call_prob=0.0,
-            max_cheat_prob=0.25,
-            is_xray=True,
-        ),
-        1.0,
-    ),
+    # (
+    #     cheat.AdaptiveCheatPlayer(
+    #         max_call_prob=0.0,
+    #         max_cheat_prob=0.25,
+    #         is_xray=True,
+    #     ),
+    #     1.0,
+    # ),
     # Heavy adaptive cheater, x-ray
     (
         cheat.AdaptiveCheatPlayer(
@@ -100,7 +100,7 @@ PLAYER_WEIGHTS /= PLAYER_WEIGHTS.sum()
 # Run a large number of games with incrementing seeds, randomly
 # selecting players for each game, and recording the results (winner and
 # scores)
-NUM_GAMES = 5000000
+NUM_GAMES = 2000000
 MAX_TURNS = 40
 
 # Create the game
