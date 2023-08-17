@@ -6,12 +6,13 @@ import lzma
 import os
 import pickle
 import datetime
-from typing import List, Callable, Dict, Any, Optional, Tuple
+from typing import List, Callable, Dict, Any, Optional, Tuple, Union
 
 import torch as t
 from torch import nn
 from torch.utils.data import random_split
 import numpy as np
+import pandas as pd
 from tqdm.auto import tqdm
 from ai_safety_games import cheat, training
 from ai_safety_games.ScoreTransformer import (
@@ -32,6 +33,17 @@ class TokenizedGames:
 
 
 @dataclass(frozen=True, kw_only=True)
+class CheatGameData:
+    """Class storing loaded cheat game data"""
+
+    game_data: TokenizedGames
+    summary: pd.DataFrame
+    loaded_game_inds: np.array
+    game_config: cheat.CheatConfig
+    players: List[cheat.CheatPlayer]
+
+
+@dataclass(frozen=True, kw_only=True)
 class CheatTrainingConfig:
     """Config for training a Cheat-playing model."""
 
@@ -39,7 +51,7 @@ class CheatTrainingConfig:
     device: str
     sequence_mode: str = ("tokens_score",)
     game_filter: Optional[Callable[Dict[str, List[Any]], List[int]]] = None
-    cached_game_data: Optional[TokenizedGames] = None
+    cached_game_data: Optional[CheatGameData] = None
     train_fraction: float
     n_layers: int
     d_model: int
@@ -69,6 +81,24 @@ def load_game_data(
         config_dict = pickle.load(file)
     game_config = cheat.CheatConfig(**config_dict["game.config"])
     game = cheat.CheatGame(game_config)
+
+    # Load player info
+    players_all = []
+    for class_str, player_vars in config_dict["players"]:
+        class_name = class_str.split("'")[1].split(".")[-1]
+        if class_name == "NaiveCheatPlayer":
+            player = cheat.NaiveCheatPlayer()
+        elif class_name == "XRayCheatPlayer":
+            player = cheat.XRayCheatPlayer(
+                probs_table=player_vars["probs_table"]
+            )
+        elif class_name == "AdaptiveCheatPlayer":
+            player = cheat.AdaptiveCheatPlayer(
+                max_call_prob=player_vars["max_call_prob"],
+                max_cheat_prob=player_vars["max_cheat_prob"],
+                is_xray=player_vars["is_xray"],
+            )
+        players_all.append(player)
 
     # Load summary info
     with open(os.path.join(dataset_folder, "summary.pkl"), "rb") as file:
@@ -147,61 +177,24 @@ def load_game_data(
     loss_mask = loss_mask[:, first_action_pos::action_pos_step]
 
     # Store all in a dataset
-    game_data = TokenizedGames(
-        tokens=tokens_all,
-        scores=scores_all,
-        seq_lens=seq_lens_all,
-        loss_mask=loss_mask,
+    return_data = CheatGameData(
+        game_data=TokenizedGames(
+            tokens=tokens_all,
+            scores=scores_all,
+            seq_lens=seq_lens_all,
+            loss_mask=loss_mask,
+        ),
+        summary=pd.DataFrame(summary_lists),
+        loaded_game_inds=np.array(game_inds),
+        game_config=game_config,
+        players=players_all,
     )
-    return game_data
+
+    return return_data
 
 
 def train(config: CheatTrainingConfig):
     """Function to train a Cheat-playing model."""
-    # Load dataset config info
-    with open(os.path.join(config.dataset_folder, "config.pkl"), "rb") as file:
-        config_dict = pickle.load(file)
-    game_config = cheat.CheatConfig(**config_dict["game.config"])
-    game = cheat.CheatGame(game_config)
-    # Load player info
-    players_all = []
-    for class_str, player_vars in config_dict["players"]:
-        class_name = class_str.split("'")[1].split(".")[-1]
-        if class_name == "NaiveCheatPlayer":
-            player = cheat.NaiveCheatPlayer()
-        elif class_name == "XRayCheatPlayer":
-            player = cheat.XRayCheatPlayer(
-                probs_table=player_vars["probs_table"]
-            )
-        elif class_name == "AdaptiveCheatPlayer":
-            player = cheat.AdaptiveCheatPlayer(
-                max_call_prob=player_vars["max_call_prob"],
-                max_cheat_prob=player_vars["max_cheat_prob"],
-                is_xray=player_vars["is_xray"],
-            )
-        players_all.append(player)
-
-    # Filter out any players if provided
-    if config.test_player_inds is not None:
-        test_players = [players_all[idx] for idx in config.test_player_inds]
-    else:
-        test_players = players_all
-
-    # Load summary info
-    with open(
-        os.path.join(config.dataset_folder, "summary.pkl"), "rb"
-    ) as file:
-        summary_lists = pickle.load(file)
-
-    # Get the token vocab
-    vocab, player_action_vocab = game.get_token_vocab()
-
-    # Positions corresponding to actions
-    first_action_pos = (
-        (game_config.num_players - 1) * 2 + 2 + game.config.num_ranks
-    )
-    action_pos_step = game_config.num_players * 2 + game.config.num_ranks
-
     # Check if we have been passed pre-cached game data
     if config.cached_game_data is None:
         game_data = load_game_data(
@@ -212,6 +205,26 @@ def train(config: CheatTrainingConfig):
     else:
         game_data = config.cached_game_data
 
+    # Get the token vocab
+    game = cheat.CheatGame(game_data.game_config)
+    vocab, player_action_vocab = game.get_token_vocab()
+
+    # Positions corresponding to actions
+    first_action_pos = (
+        (game_data.game_config.num_players - 1) * 2 + 2 + game.config.num_ranks
+    )
+    action_pos_step = (
+        game_data.game_config.num_players * 2 + game.config.num_ranks
+    )
+
+    # Filter out any players if provided
+    if config.test_player_inds is not None:
+        test_players = [
+            game_data.players[idx] for idx in config.test_player_inds
+        ]
+    else:
+        test_players = game_data.players
+
     # Training loop using library function
 
     # Split data into train and test sets
@@ -220,7 +233,7 @@ def train(config: CheatTrainingConfig):
     train_inds, test_inds = [
         t.tensor(subset)
         for subset in random_split(
-            range(game_data.tokens.shape[0]),
+            range(game_data.game_data.tokens.shape[0]),
             [config.train_fraction, (1 - config.train_fraction)],
             generator=generator,
         )
@@ -237,7 +250,7 @@ def train(config: CheatTrainingConfig):
             act_fn="relu",
             device=config.device,
             seed=config.seed,
-            n_ctx=game_data.seq_lens.max().item(),
+            n_ctx=game_data.game_data.seq_lens.max().item(),
             attn_only=config.attn_only,
         ),
         st_cfg=ScoreTransformerConfig(
@@ -248,13 +261,16 @@ def train(config: CheatTrainingConfig):
     # Standard test function
     test_loss_func = training.make_standard_test_func(
         test_data=training.TrainingTensors(
-            inputs=[game_data.tokens[test_inds], game_data.scores[test_inds]],
-            output=game_data.tokens[
+            inputs=[
+                game_data.game_data.tokens[test_inds],
+                game_data.game_data.scores[test_inds],
+            ],
+            output=game_data.game_data.tokens[
                 test_inds, first_action_pos::action_pos_step
             ]
             .detach()
             .clone(),
-            loss_mask=game_data.loss_mask[test_inds],
+            loss_mask=game_data.game_data.loss_mask[test_inds],
         ),
         test_batch_size=config.batch_size,
     )
@@ -277,10 +293,10 @@ def train(config: CheatTrainingConfig):
         for goal_score in test_goal_scores:
             test_margins = run_test_games(
                 model=model,
-                game_config=game_config,
+                game_config=game_data.game_config,
                 num_games=parent_config.num_test_games,
                 goal_score=goal_score,
-                max_turns=max(summary_lists["turn_cnt"]),
+                max_turns=max(game_data.summary["turn_cnt"]),
                 players=test_players,
                 seed=parent_config.seed,
             )
@@ -292,6 +308,10 @@ def train(config: CheatTrainingConfig):
             test_results[f"test_margin_std_goal_{goal_score}"] = np.std(
                 test_margins
             )
+            test_results[f"test_win_rate_goal_{goal_score}"] = np.mean(
+                test_margins > 0
+            )
+
         return test_results
 
     # Train!
@@ -310,15 +330,15 @@ def train(config: CheatTrainingConfig):
         ),
         training_data=training.TrainingTensors(
             inputs=[
-                game_data.tokens[train_inds],
-                game_data.scores[train_inds],
+                game_data.game_data.tokens[train_inds],
+                game_data.game_data.scores[train_inds],
             ],
-            output=game_data.tokens[
+            output=game_data.game_data.tokens[
                 train_inds, first_action_pos::action_pos_step
             ]
             .detach()
             .clone(),
-            loss_mask=game_data.loss_mask[train_inds],
+            loss_mask=game_data.game_data.loss_mask[train_inds],
         ),
         test_func=test_func,
     )
@@ -338,7 +358,7 @@ def train(config: CheatTrainingConfig):
         )
 
     # Return
-    return results, game_data
+    return results, game_data, test_func
 
 
 def scores_to_margins(scores):
@@ -354,13 +374,14 @@ def scores_to_margins(scores):
 
 
 def run_test_games(
-    model: ScoreTransformer,
+    model: Union[ScoreTransformer, cheat.CheatPlayer],
     game_config: cheat.CheatConfig,
     num_games: int,
     goal_score: int,
     max_turns: int,
     players: List[cheat.CheatPlayer],
     seed: int,
+    show_progress: bool = False,
 ):
     """Run some test games to see how the model performs."""
     rng = np.random.default_rng(seed=seed)
@@ -370,13 +391,15 @@ def run_test_games(
     vocab, _ = game.get_token_vocab()
 
     model_margins = []
-    for game_idx in range(num_games):
+    for game_idx in tqdm(range(num_games), disable=not show_progress):
         # Create a list of players with the model-based player in the first
         # position, then other randomly-selected players
         players_this = [
             cheat.ScoreTransformerCheatPlayer(
                 model=model, vocab=vocab, goal_score=goal_score
-            ),
+            )
+            if not isinstance(model, cheat.CheatPlayer)
+            else model,
             *rng.choice(
                 players, size=game_config.num_players - 1, replace=True
             ),

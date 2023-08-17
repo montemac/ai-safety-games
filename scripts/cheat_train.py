@@ -2,6 +2,8 @@
 # Imports, etc
 from typing import Dict, List, Any
 
+import numpy as np
+import pandas as pd
 import torch as t
 import plotly.express as px
 
@@ -15,20 +17,21 @@ _ = t.set_grad_enabled(True)
 # %%
 # Pre-init the cached game data
 # DATASET_FOLDER = "../datasets/random_dataset_20230731T001342"
-DATASET_FOLDER = "../datasets/random_dataset_20230814T133939"
+DATASET_FOLDER = "../datasets/random_dataset_20230815T235622"
 DEVICE = "cuda:0"
-SEQUENCE_MODE = "tokens_win"
+SEQUENCE_MODE = "tokens_score"
 
-# This setup will only load training data for players that never call,
-# so we'd expect that cheating constantly would be optimal?
-INCLIDED_PLAYERS = [0, 2, 3]
+
+# %%
+# Load game data
+INCLUDED_PLAYERS = [0, 3]
 
 
 def game_filter(summary_lists: Dict[str, List[Any]]) -> List[int]:
     """Filter out games that don't match criteria"""
     inds = []
     for idx, player_inds in enumerate(summary_lists["player_indices"]):
-        if all([player_ind in INCLIDED_PLAYERS for player_ind in player_inds]):
+        if all([player_ind in INCLUDED_PLAYERS for player_ind in player_inds]):
             inds.append(idx)
     return inds
 
@@ -40,12 +43,33 @@ game_data = cheat_utils.load_game_data(
     device=DEVICE,
 )
 
+# %%
+# Quick dataset analysis
+loaded_summary = game_data.summary.iloc[game_data.loaded_game_inds]
+player_tuples = loaded_summary["player_indices"].apply(lambda x: tuple(x))
+first_player = player_tuples.apply(lambda x: x[0]).rename("first_player")
+
+
+def scores_to_win_pos(scores):
+    """Convert scores to winning player position"""
+    scores = [s for idx, s in scores]
+    arg_sort = np.argsort(scores)
+    if scores[arg_sort[-1]] == scores[arg_sort[-2]]:
+        return -1
+    else:
+        return arg_sort[-1]
+
+
+winning_pos = (
+    loaded_summary["scores"].apply(scores_to_win_pos).rename("winning_pos")
+)
+
+win_rate_by_first_player = (winning_pos == 0).groupby([first_player]).mean()
+
 
 # %%
 # Train using new high-level function
-
-
-results, cached_game_data = cheat_utils.train(
+results, game_data, test_func = cheat_utils.train(
     cheat_utils.CheatTrainingConfig(
         dataset_folder=DATASET_FOLDER,
         sequence_mode=SEQUENCE_MODE,
@@ -54,19 +78,19 @@ results, cached_game_data = cheat_utils.train(
         cached_game_data=game_data,
         train_fraction=0.99,
         n_layers=1,
-        d_model=128,
+        d_model=64,
         d_head=16,
         attn_only=True,
-        epochs=3,
+        epochs=10,
         batch_size=1000,
         lr=0.001,
         # lr_schedule=("cosine_with_warmup", {"warmup_fraction": 0.05}),
         lr_schedule=None,
         weight_decay=0,
         log_period=50000,
-        seed=0,
-        test_player_inds=INCLIDED_PLAYERS,
-        test_goal_scores=[1],
+        seed=1,
+        test_player_inds=INCLUDED_PLAYERS,
+        test_goal_scores=[2, 5],
     )
 )
 
@@ -78,11 +102,39 @@ px.line(
     y=[
         "loss_train",
         "loss_test",
-        "test_margin_mean_goal_1",
+        # "test_margin_mean_goal_2",
         # "test_margin_mean_goal_5",
+        "test_win_rate_goal_5",
     ],
     title="Training loss",
 ).show()
+
+# %%
+# Run some more tests
+test_players = [game_data.players[idx] for idx in INCLUDED_PLAYERS]
+
+goal_score = 5
+margins_list = []
+for player in [results.model] + test_players:
+    # for goal_score in [5]:
+    margins = cheat_utils.run_test_games(
+        model=player,
+        game_config=game_data.game_config,
+        num_games=500,
+        goal_score=goal_score,
+        max_turns=max(game_data.summary["turn_cnt"]),
+        players=test_players,
+        seed=0,
+        show_progress=True,
+    )
+    margins_list.append(
+        {
+            "goal_score": goal_score,
+            "mean_margin": margins.mean(),
+            "win_rate": (margins > 0).mean(),
+        }
+    )
+margins_df = pd.DataFrame(margins_list)
 
 
 # %%
