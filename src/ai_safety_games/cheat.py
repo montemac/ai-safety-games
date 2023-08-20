@@ -276,7 +276,8 @@ class CheatGame:
             )
         output.append(f"pile: {self.cards_to_string(self.state.pile)}")
         output.append(
-            f"prev action: {self.action_meanings[self.state.prev_player_effective_action]}"
+            f"prev action: "
+            + f"{self.action_meanings[self.state.prev_player_effective_action]}"
             + f" ({self.action_meanings[self.state.prev_player_action]})"
         )
         output.append(f"last claimed rank: {self.state.last_claimed_rank}")
