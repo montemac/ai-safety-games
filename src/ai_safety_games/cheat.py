@@ -55,7 +55,7 @@ ActionId = int
 ObsActionId = int
 
 
-@dataclass
+@dataclass(kw_only=True)
 class CheatConfig:
     """Dataclass defining the configuration of a game of Cheat.
     Interface roughly analogous to a Gym Env."""
@@ -65,6 +65,7 @@ class CheatConfig:
     num_players: int = 3
     passing_allowed: bool = True
     allowed_next_ranks: str = "above"
+    penalize_wrong_played_card: bool = True
     history_length: Optional[int] = None
     seed: int = 0
     verbose: bool = False
@@ -392,8 +393,10 @@ class CheatGame:
                 self._give_pile_to_player(self.state.current_player)
             elif play_rank not in ranks_in_hand:
                 # Played card not in hand, consider this a pass action
-                # TODO: maybe this should also be penalized
-                effective_action = self.action_ids["pass"]
+                if self.config.penalize_wrong_played_card:
+                    self._give_pile_to_player(self.state.current_player)
+                else:
+                    effective_action = self.action_ids["pass"]
             else:
                 self._verbose_print(f"  play okay {action_s}")
                 # Process a call if included in the action
