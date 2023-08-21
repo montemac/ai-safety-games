@@ -15,6 +15,7 @@ import pandas as pd
 import torch as t
 from tqdm.auto import tqdm
 import plotly.express as px
+from einops import rearrange, einsum
 
 from ai_safety_games import cheat, utils, training, cheat_utils
 from ai_safety_games.ScoreTransformer import ScoreTransformer
@@ -57,6 +58,11 @@ config = cheat_utils.CheatTrainingConfig(**results_all["config"])
 results = training.TrainingResults(**results_all["training_results"])
 model = results.model
 
+# Do some interp-friendly processing of weights
+model.process_weights_(
+    fold_ln=True, center_writing_weights=False, center_unembed=True
+)
+
 with open(os.path.join(config.dataset_folder, "config.pkl"), "rb") as file:
     config_dict = pickle.load(file)
     game_config = cheat.CheatConfig(**config_dict["game.config"])
@@ -78,16 +84,55 @@ with open(os.path.join(config.dataset_folder, "config.pkl"), "rb") as file:
             )
         players_all.append(player)
 
+game = cheat.CheatGame(config=game_config)
+vocab, action_vocab = game.get_token_vocab()
+vocab_str = {idx: token_str for token_str, idx in vocab.items()}
+
+
+# %%
+# Inspect some of the model weights
+W_QK = einsum(
+    model.blocks[0].attn.W_Q,
+    model.blocks[0].attn.W_K,
+    "h dmq dh, h dmk dh -> h dmq dmk",
+)
+QK = einsum(
+    model.token_embed.W_E,
+    W_QK,
+    model.token_embed.W_E,
+    "tq dmq, h dmq dmk, tk dmk -> h tq tk",
+)
+W_OV = einsum(
+    model.blocks[0].attn.W_O,
+    model.blocks[0].attn.W_V,
+    "h dh dmo, h dmv dh -> h dmo dmv",
+)
+OV = einsum(
+    model.unembed.W_U,
+    W_OV,
+    model.token_embed.W_E,
+    "dmo da, h dmo dmv, tv dmv -> h da tv",
+)
+# Only look at possible destination tokens that could preceed our
+# action, i.e. number of final rank cards
+dst_inds = t.tensor(
+    [
+        vocab[f"hand_{num}x{game_config.num_ranks-1}"]
+        for num in range(game_config.num_suits + 1)
+    ]
+)
+act_inds = t.tensor(list(action_vocab.keys()))
+
+QKf = QK[:, dst_inds, :].cpu().numpy()
+OVf = OV[:, act_inds, :].cpu().numpy()
+
+
 # %%
 # Run a game, then turn the history into a token sequence and run it through the model
 SEED = 0
 GOAL_SCORE = 5
 
 rng = np.random.default_rng(seed=SEED)
-
-game = cheat.CheatGame(config=game_config)
-vocab, action_vocab = game.get_token_vocab()
-vocab_str = {idx: token_str for token_str, idx in vocab.items()}
 
 players_can_use = [players_all[idx] for idx in [0, 3]]
 
@@ -134,8 +179,8 @@ top_k = 10
 top_k_tokens = pd.DataFrame(
     [
         [
-            # action_probs[i, idx].item()
-            vocab_str[idx]
+            action_probs[i, idx].item()
+            # vocab_str[idx]
             for idx in sort_inds[i, -top_k:].cpu().numpy()[::-1]
         ]
         for i in range(sort_inds.shape[0])
