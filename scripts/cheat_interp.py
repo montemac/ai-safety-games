@@ -213,21 +213,138 @@ OV_df = pd.DataFrame(
 
 # %%
 # Visualize some stuff!
-filts = {
-    "Prev player action": (token_props.type == "other_action")
-    & (token_props.player == game_config.num_players - 2),
-    "Hand": (token_props.type == "hand"),
-}
-for filt_name, filt in filts.items():
-    fig = px.scatter(
-        QK_df[filt].reset_index().melt(id_vars="src_token"),
-        x="src_token",
-        y="value",
-        facet_row="head",
-        color="dst_token",
-        title=f"QK: {filt_name}",
+# filts = {
+#     "Prev player action": (token_props.type == "other_action")
+#     & (token_props.player == game_config.num_players - 2),
+#     "Hand": (token_props.type == "hand"),
+# }
+# for filt_name, filt in filts.items():
+#     fig = px.scatter(
+#         QK_df[filt].reset_index().melt(id_vars="src_token"),
+#         x="src_token",
+#         y="value",
+#         facet_row="head",
+#         color="dst_token",
+#         title=f"QK: {filt_name}",
+#     )
+#     fig.show()
+
+# %%
+# Study positional embeddings
+QK_pos = einsum(
+    model.pos_embed_copy.W_pos,
+    W_QK,
+    model.pos_embed_copy.W_pos,
+    "pq dmq, h dmq dmk, pk dmk -> h pq pk",
+)
+
+QK_pos_tri = QK_pos.cpu().numpy()
+for head in range(QK_pos_tri.shape[0]):
+    tmp = QK_pos_tri[head, :, :]
+    tmp[np.triu_indices(QK_pos_tri.shape[1], 1)] = -np.inf
+
+# Role of each position in the cycle
+POS_CYCLE = np.array(
+    [
+        "action / BOG",
+        "result / SCORE",
+        "action_0",
+        "result_0",
+        "action_1",
+        "result_1",
+        "hand_0",
+        "hand_1",
+        "hand_2",
+        "hand_3",
+        "hand_4",
+        "hand_5",
+        "hand_6",
+        "hand_7",
+    ]
+)
+
+# For each head, iterate through destination positions relevant to
+# action predictions, and show the top-K source positions, sorted by their
+# QK_pos_tri value
+K = 5
+top_src_pos_list = []
+for head in range(QK_pos_tri.shape[0]):
+    for action_ind, dst_pos in enumerate(
+        range(first_action_pos - 1, QK_pos_tri.shape[1], action_pos_step)
+    ):
+        # Get the top-K source positions
+        sort_inds = QK_pos_tri[head, dst_pos, :].argsort()[::-1]
+        top_k_src_pos = sort_inds[:K]
+        # Get the QK_pos values for the top-K source positions
+        top_k_qk_pos = QK_pos_tri[head, dst_pos, top_k_src_pos]
+        # Put this into a DataFrame
+        top_src_pos_list.append(
+            pd.DataFrame(
+                {
+                    "head": head,
+                    "dst_pos": dst_pos,
+                    "src_pos": top_k_src_pos,
+                    "qk_val": top_k_qk_pos,
+                    "action_ind": action_ind,
+                }
+            )
+        )
+top_src_pos_df = pd.concat(top_src_pos_list).set_index(["head", "action_ind"])
+# Add a column for the dst and src position names take from POS_CYCLE
+top_src_pos_df["dst_pos_next_name"] = POS_CYCLE[
+    np.mod(top_src_pos_df.dst_pos + 1, len(POS_CYCLE))
+]
+top_src_pos_df["src_pos_name"] = POS_CYCLE[
+    np.mod(top_src_pos_df.src_pos, len(POS_CYCLE))
+]
+# Add column for the turn index of the source positions
+top_src_pos_df["src_pos_turn"] = (
+    top_src_pos_df.src_pos - first_action_pos
+) // action_pos_step + 1
+
+NUM_ACTIONS_PLOT = 3
+for head in range(QK_pos_tri.shape[0]):
+    last_action_pos = (
+        first_action_pos + (NUM_ACTIONS_PLOT - 1) * action_pos_step
+    )
+    fig = px.imshow(
+        QK_pos_tri[
+            head,
+            (first_action_pos - 1) : last_action_pos : action_pos_step,
+            :last_action_pos,
+        ],
+        color_continuous_scale="piyg",
+        color_continuous_midpoint=0,
+        title=f"QK_pos, head: {head}",
+    )
+    # Update x/y axis labels
+    fig.update_xaxes(
+        ticktext=np.tile(POS_CYCLE, NUM_ACTIONS_PLOT),
+        tickvals=np.arange(len(POS_CYCLE) * NUM_ACTIONS_PLOT),
+        tickangle=-45,
+        title_text="Source position",
+    )
+    fig.update_yaxes(
+        title_text="Action index",
     )
     fig.show()
+    print(
+        top_src_pos_df.loc[
+            (head, slice(NUM_ACTIONS_PLOT)),
+            ["src_pos_name", "src_pos_turn", "qk_val"],
+        ]
+    )
+
+
+# QK_pos_plot = QK_pos[1].cpu().numpy()
+# QK_pos_plot[np.triu_indices(QK_pos_plot.shape[0], -1)] = np.nan
+# QK_pos_plot = QK_pos_plot[(first_action_pos - 1) :: action_pos_step, :]
+# px.imshow(
+#     QK_pos_plot,
+#     color_continuous_scale="piyg",
+#     color_continuous_midpoint=0,
+#     aspect="auto",
+# ).show()
 
 
 # %%
