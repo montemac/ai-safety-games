@@ -119,6 +119,7 @@ def load_game_data(
     vocab_strs = {idx: tok for tok, idx in vocab.items()}
 
     # Positions corresponding to actions
+    # TODO: save this in results for later use
     first_action_pos = (
         (game_config.num_players - 1) * 2 + 2 + game.config.num_ranks
     )
