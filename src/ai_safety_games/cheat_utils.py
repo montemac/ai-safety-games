@@ -383,6 +383,7 @@ def run_test_games(
     players: List[cheat.CheatPlayer],
     seed: int,
     show_progress: bool = False,
+    post_proc_func: Optional[Callable[[cheat.CheatGame], Any]] = None,
 ):
     """Run some test games to see how the model performs."""
     rng = np.random.default_rng(seed=seed)
@@ -392,6 +393,7 @@ def run_test_games(
     vocab, _ = game.get_token_vocab()
 
     model_margins = []
+    post_proc_results = []
     for game_idx in tqdm(range(num_games), disable=not show_progress):
         # Create a list of players with the model-based player in the first
         # position, then other randomly-selected players
@@ -419,4 +421,11 @@ def run_test_games(
 
         model_margins.append(margins_this[0])
 
+        # Apply post-processing function if provided
+        if post_proc_func is not None:
+            post_proc_result = post_proc_func(game)
+            post_proc_results.append(post_proc_result)
+
+    if post_proc_func is not None:
+        return np.array(model_margins), post_proc_results
     return np.array(model_margins)
