@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import torch as t
 import plotly.express as px
+from tqdm.auto import tqdm
 
 from ai_safety_games import cheat_utils, utils
 
@@ -69,30 +70,47 @@ win_rate_by_first_player = (winning_pos == 0).groupby([first_player]).mean()
 
 # %%
 # Train using new high-level function
-results, game_data, test_func = cheat_utils.train(
-    cheat_utils.CheatTrainingConfig(
-        dataset_folder=DATASET_FOLDER,
-        sequence_mode=SEQUENCE_MODE,
-        game_filter=game_filter,
-        device=DEVICE,
-        cached_game_data=game_data,
-        train_fraction=0.99,
-        n_layers=1,
-        d_model=64,
-        d_head=16,
-        attn_only=True,
-        epochs=10,
-        batch_size=1000,
-        lr=0.001,
-        # lr_schedule=("cosine_with_warmup", {"warmup_fraction": 0.05}),
-        lr_schedule=None,
-        weight_decay=0,
-        log_period=50000,
-        seed=1,
-        test_player_inds=INCLUDED_PLAYERS,
-        test_goal_scores=[2, 5],
-    )
-)
+# Train with a variety of cheat penalty settings
+CHEAT_PENALTY_WEIGHTS = [0.1, 0.3, 1.0, 3.0, 10.0, 30, 100]
+CHEAT_PENALTY_APPLY_PROBS = [0.01, 0.03, 0.1, 0.3, 1.0]
+results_list = []
+for cheat_penalty_weight in tqdm(CHEAT_PENALTY_WEIGHTS):
+    for cheat_penalty_apply_prob in tqdm(CHEAT_PENALTY_APPLY_PROBS):
+        results, game_data, test_func = cheat_utils.train(
+            cheat_utils.CheatTrainingConfig(
+                dataset_folder=DATASET_FOLDER,
+                sequence_mode=SEQUENCE_MODE,
+                game_filter=game_filter,
+                device=DEVICE,
+                cached_game_data=game_data,
+                train_fraction=0.99,
+                n_layers=1,
+                d_model=64,
+                d_head=16,
+                attn_only=True,
+                epochs=10,
+                batch_size=1000,
+                lr=0.001,
+                # lr_schedule=("cosine_with_warmup", {"warmup_fraction": 0.05}),
+                lr_schedule=None,
+                weight_decay=0,
+                log_period=50000,
+                seed=1,
+                test_player_inds=INCLUDED_PLAYERS,
+                test_goal_scores=[5],
+                cheat_penalty_weight=cheat_penalty_weight,
+                cheat_penalty_apply_prob=cheat_penalty_apply_prob,
+                cheat_penalty_min_prob=0.1,
+            )
+        )
+        results_list.append(
+            {
+                "cheat_penalty_weight": cheat_penalty_weight,
+                "cheat_penalty_apply_prob": cheat_penalty_apply_prob,
+                "results": results,
+            }
+        )
+
 
 # %%
 # Show training results

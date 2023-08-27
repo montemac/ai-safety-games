@@ -67,6 +67,10 @@ class CheatTrainingConfig:
     test_goal_scores: Optional[List[int]] = None
     test_player_inds: Optional[List[int]] = None
     num_test_games: int = 100
+    # Special training modes
+    cheat_penalty_weight: float = 0.0
+    cheat_penalty_apply_prob: float = 0.0
+    cheat_penalty_min_prob: float = 0.1
 
 
 def load_game_data(
@@ -209,6 +213,7 @@ def train(config: CheatTrainingConfig):
     # Get the token vocab
     game = cheat.CheatGame(game_data.game_config)
     vocab, player_action_vocab = game.get_token_vocab()
+    token_props, action_props = cheat.get_token_props(vocab=vocab)
 
     # Positions corresponding to actions
     first_action_pos = (
@@ -315,6 +320,55 @@ def train(config: CheatTrainingConfig):
 
         return test_results
 
+    # Custom loss function, if needed
+    if config.cheat_penalty_weight > 0:
+        rng_cheat_penalty = np.random.default_rng(seed=config.seed + 1)
+
+        # 1D bool tensor indicating whether each action is a cheating
+        # action
+        action_is_cheat = t.tensor(action_props["is_cheat"].values).to(
+            config.device
+        )
+
+        def loss_fn(logits, actions, mask, epoch, batch):
+            """Custom loss function that penalizes cheating sometimes."""
+            # Calculate the standard loss
+            loss = model.loss_fn(logits, actions, loss_mask=mask)
+            # Sample whether we apply the cheating penalty this batch
+            if rng_cheat_penalty.random() < config.cheat_penalty_apply_prob:
+                # Calculate the cheating penalty by converting logits
+                # into probabilities, then masking out any actions with a
+                # probability too low. We then mask out any non-cheating
+                # actions, and finally apply the provided mask as well.
+                # Any remaining non-masked actions are sufficiently
+                # likely cheatings actions, so we use their log-probs as
+                # the penalty, weighted by the provided weight, and
+                # meaned over the batch.
+                log_probs = t.log_softmax(logits, dim=-1)
+                prob_is_high = log_probs > np.log(
+                    config.cheat_penalty_min_prob
+                )
+                do_penalize = prob_is_high * action_is_cheat[None, None, :]
+                if mask is not None:
+                    do_penalize = do_penalize * mask[:, :, None]
+                if do_penalize.sum() > 0:
+                    cheat_penalty = (
+                        -(log_probs * do_penalize).sum() / do_penalize.sum()
+                    ) * config.cheat_penalty_weight
+                else:
+                    cheat_penalty = 0
+                # print(
+                #     f"Epoch {epoch}, batch {batch}, loss {loss}, "
+                #     f"cheat penalty {cheat_penalty}"
+                # )
+            else:
+                cheat_penalty = 0
+            # Add the cheating penalty to the loss and return
+            return loss + cheat_penalty
+
+    else:
+        loss_fn = None
+
     # Train!
     results = training.train_custom_transformer(
         model=model,
@@ -342,6 +396,7 @@ def train(config: CheatTrainingConfig):
             loss_mask=game_data.game_data.loss_mask[train_inds],
         ),
         test_func=test_func,
+        loss_func=loss_fn,
     )
 
     # Store results
@@ -354,7 +409,14 @@ def train(config: CheatTrainingConfig):
 
     with open(os.path.join(output_dir, "results.pkl"), "wb") as file:
         pickle.dump(
-            {"config": asdict(config), "training_results": asdict(results)},
+            {
+                "config": {
+                    k: v
+                    for k, v in asdict(config).items()
+                    if k != "cached_game_data"
+                },
+                "training_results": asdict(results),
+            },
             file,
         )
 

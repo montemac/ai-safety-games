@@ -1248,6 +1248,109 @@ class AdaptiveCheatPlayer(RandomCheatPlayer):
         return super().step(obs, game)
 
 
+def get_token_props(vocab: Dict[str, int]):
+    """Get a table of token properties from a vocabulary."""
+    # Create a tokens table containing different token properties
+    token_props = pd.DataFrame({"id": vocab.values()}, index=vocab.keys())
+    token_str = pd.Series(vocab.keys(), index=vocab.keys())
+    # Token type
+    token_type = pd.Series("misc", index=vocab.keys())
+    token_type[token_str.str.startswith("a_")] = "player_action"
+    token_type[token_str.str.match("ar_[\D]")] = "player_result"
+    token_type[token_str.str.startswith("oa_")] = "other_action"
+    token_type[token_str.str.match("ar_[\d]")] = "other_result"
+    token_type[token_str.str.startswith("hand_")] = "hand"
+    token_props["type"] = token_type
+    # Data associated with specific token types
+    # Hand
+    hand_data = (
+        token_str[token_props.type == "hand"]
+        .str.extract(r"hand_(\d+)x(\d+)")
+        .astype(int)
+    )
+    token_props["hand_num"] = -1
+    token_props.loc[token_props.type == "hand", "hand_num"] = hand_data[0]
+    token_props["hand_rank"] = -1
+    token_props.loc[token_props.type == "hand", "hand_rank"] = hand_data[1]
+    # Claimed card
+    token_props["claimed_card"] = (
+        token_str.str.extract(r".*_c(\d+).*").fillna(-1).astype(int)
+    )
+    token_props["played_card"] = (
+        token_str.str.extract(r".*_p(\d+).*").fillna(-1).astype(int)
+    )
+    # Player the token in associated with
+    token_player = pd.Series(-1, index=vocab.keys())
+    is_other_player = token_props.type.isin(["other_action", "other_result"])
+    token_player[is_other_player] = (
+        token_str[is_other_player].str.extract(r"[a-z]+_(\d+)_")[0].astype(int)
+    )
+    token_player[
+        token_props.type.isin(["player_action", "player_result", "hand"])
+    ] = (token_player[is_other_player].max() + 1)
+    token_props["player"] = token_player.astype(int)
+    # Whether an action is a call or not
+    token_props["is_call"] = token_str.str.endswith("_call")
+    # Whether an action is passing or not, or playing an card or not
+    token_props["is_pass"] = token_str.str.endswith("_pass")
+    token_props["is_play_card"] = token_str.str.contains("_c[\d]+_")
+    token_props["is_player_play_card"] = token_props.is_play_card & (
+        token_props.type == "player_action"
+    )
+    # Whether a player action is cheating or not
+    is_cheat = pd.Series(False, index=vocab.keys())
+    is_cheat[token_props.is_player_play_card] = (
+        token_str[token_props.is_player_play_card]
+        .str.extract(".*_c([\d]+)_p([\d]+).*")
+        .astype(int)
+        .diff(axis=1)[1]
+        != 0
+    )
+    token_props["is_cheat"] = is_cheat.astype(bool)
+
+    action_props = token_props[token_props.type == "player_action"]
+    return token_props, action_props
+
+
+def get_action_types(game):
+    """Get some stats about cheating in a game, assuming we're player
+    0."""
+    action_history = game.get_actions_from_state_history()
+    action_types = []
+    for state, action in zip(game.state_history, action_history):
+        if state.current_player == 0:
+            action_s = game.action_meanings[action]
+            ranks_in_hand = game.get_ranks_in_hand(state.hands[0])
+            allowed_ranks_in_hand = ranks_in_hand.intersection(
+                set(state.allowed_next_ranks)
+            )
+            can_play = len(allowed_ranks_in_hand) > 0
+            if action_s == "pass":
+                action_type = "pass"
+            else:
+                (
+                    claimed_rank,
+                    played_rank,
+                    is_call,
+                ) = game.get_fields_from_play_card_action(action_s)
+                if is_call:
+                    action_type = "call"
+                else:
+                    if (
+                        claimed_rank not in state.allowed_next_ranks
+                        or played_rank not in ranks_in_hand
+                    ):
+                        action_type = "error"
+                    elif claimed_rank == played_rank:
+                        action_type = "play"
+                    else:
+                        action_type = "cheat"
+            action_types.append(
+                {"action_type": action_type, "can_play": can_play}
+            )
+    return pd.DataFrame(action_types)
+
+
 def run(
     game: CheatGame,
     players: list[CheatPlayer],

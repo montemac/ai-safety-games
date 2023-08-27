@@ -61,6 +61,9 @@ class TrainingResults:
 # and test index, and returns a dictionary of test results
 TestFunc = Callable[[nn.Module, TrainingConfig, int], Dict[str, Any]]
 
+# And for custom loss function
+LossFunc = Callable[[t.Tensor, t.Tensor, t.Tensor, int, int], t.Tensor]
+
 
 def make_standard_test_func(
     test_data: TrainingTensors, test_batch_size: int
@@ -117,6 +120,7 @@ def train_custom_transformer(
     config: TrainingConfig,
     training_data: TrainingTensors,
     test_func: Optional[TestFunc] = None,
+    loss_func: Optional[LossFunc] = None,
 ):
     """Train a decision transformer model given an RSA dataset. Assumes
     that the full dataset can fit in memory at once. Also assumes that
@@ -187,9 +191,18 @@ def train_custom_transformer(
 
                 # Forward + backward + optimize
                 logits = model(*inputs_batch)
-                loss = model.loss_fn(
-                    logits, output_batch, loss_mask=loss_mask_batch
-                )
+                if loss_func is not None:
+                    loss = loss_func(
+                        logits=logits,
+                        actions=output_batch,
+                        mask=loss_mask_batch,
+                        epoch=epoch,
+                        batch=batch_idx,
+                    )
+                else:
+                    loss = model.loss_fn(
+                        logits, output_batch, loss_mask=loss_mask_batch
+                    )
                 loss_total += loss.item() * batch_size
                 loss_cnt += batch_size
                 loss.backward()

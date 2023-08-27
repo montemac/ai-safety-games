@@ -24,6 +24,58 @@ utils.enable_ipython_reload()
 # Disable gradients
 _ = t.set_grad_enabled(False)
 
+game_filter = None
+
+
+# %%
+# Test cheat penalties
+RESULTS_RANGE = ("20230827T002903", "20230827T060501")
+fns_all = list(glob.glob("cheat_train_results/*"))
+fns_in_range = [
+    fn
+    for fn in fns_all
+    if RESULTS_RANGE[0] <= fn.split("/")[-1] <= RESULTS_RANGE[1]
+]
+
+# Load one-by-one and store key results
+results_list = []
+for fn in tqdm(fns_in_range):
+    with open(os.path.join(fn, "results.pkl"), "rb") as file:
+        results = pickle.load(file)
+    results_list.append(
+        pd.DataFrame(
+            {
+                "fn": fn,
+                "cheat_penalty_weight": results["config"][
+                    "cheat_penalty_weight"
+                ],
+                "cheat_penalty_apply_prob": results["config"][
+                    "cheat_penalty_apply_prob"
+                ],
+                "win_rate": results["training_results"]["results"][
+                    "test_win_rate_goal_5"
+                ],
+            }
+        )
+    )
+
+# TODO: pull the cheat stats stuff from cheat_interp.py, move it into
+# cheat_utils.py, and use it here to get the stats for each model
+
+results_df = (
+    pd.concat(results_list)
+    .reset_index()
+    .sort_values(["cheat_penalty_weight", "cheat_penalty_apply_prob"])
+)
+px.line(
+    results_df,
+    x="index",
+    y="win_rate",
+    color="cheat_penalty_weight",
+    facet_col="cheat_penalty_apply_prob",
+)
+
+#################################################################################
 
 # %%
 # Load some stuff about the dataset, and the model to test
