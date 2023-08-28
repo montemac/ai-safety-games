@@ -436,6 +436,61 @@ def scores_to_margins(scores):
     ]
 
 
+def get_action_types(game):
+    """Get some stats about cheating in a game, assuming we're player
+    0."""
+    action_history = game.get_actions_from_state_history()
+    action_types = []
+    for state, action in zip(game.state_history, action_history):
+        if state.current_player == 0:
+            action_s = game.action_meanings[action]
+            ranks_in_hand = game.get_ranks_in_hand(state.hands[0])
+            allowed_ranks_in_hand = ranks_in_hand.intersection(
+                set(state.allowed_next_ranks)
+            )
+            can_play = len(allowed_ranks_in_hand) > 0
+            if action_s == "pass":
+                action_type = "pass"
+            else:
+                (
+                    claimed_rank,
+                    played_rank,
+                    is_call,
+                ) = game.get_fields_from_play_card_action(action_s)
+                if is_call:
+                    action_type = "call"
+                else:
+                    if (
+                        claimed_rank not in state.allowed_next_ranks
+                        or played_rank not in ranks_in_hand
+                    ):
+                        action_type = "error"
+                    elif claimed_rank == played_rank:
+                        action_type = "play"
+                    else:
+                        action_type = "cheat"
+            action_types.append(
+                {"action_type": action_type, "can_play": can_play}
+            )
+    return pd.DataFrame(action_types)
+
+
+def get_cheat_rate(action_types):
+    """Reduce a list of action types for individual games to an overall
+    cheat rate."""
+    cheat_count = (
+        pd.concat(action_types)
+        .reset_index()
+        .groupby("action_type")
+        .count()
+        .loc["cheat"]
+    )
+    all_count = sum(
+        [action_types_this.shape[0] for action_types_this in action_types]
+    )
+    return (cheat_count / all_count).values[0]
+
+
 def run_test_games(
     model: Union[ScoreTransformer, cheat.CheatPlayer],
     game_config: cheat.CheatConfig,
@@ -445,7 +500,8 @@ def run_test_games(
     players: List[cheat.CheatPlayer],
     seed: int,
     show_progress: bool = False,
-    post_proc_func: Optional[Callable[[cheat.CheatGame], Any]] = None,
+    map_func: Optional[Callable[[cheat.CheatGame], Any]] = None,
+    reduce_func: Optional[Callable[[List[Any]], Any]] = None,
 ):
     """Run some test games to see how the model performs."""
     rng = np.random.default_rng(seed=seed)
@@ -484,10 +540,37 @@ def run_test_games(
         model_margins.append(margins_this[0])
 
         # Apply post-processing function if provided
-        if post_proc_func is not None:
-            post_proc_result = post_proc_func(game)
+        if map_func is not None:
+            post_proc_result = map_func(game)
             post_proc_results.append(post_proc_result)
 
-    if post_proc_func is not None:
+    if map_func is not None:
+        if reduce_func is not None:
+            post_proc_results = reduce_func(post_proc_results)
         return np.array(model_margins), post_proc_results
     return np.array(model_margins)
+
+
+def load_config_and_players_from_dataset(dataset_folder: str):
+    """Load various config info and player objects."""
+    with open(os.path.join(dataset_folder, "config.pkl"), "rb") as file:
+        config_dict = pickle.load(file)
+        game_config = cheat.CheatConfig(**config_dict["game.config"])
+        # Load players (don't save classes in case they have changed a bit
+        # and loading breaks)
+        players_all = []
+        for class_str, player_vars in config_dict["players"]:
+            class_name = class_str.split("'")[1].split(".")[-1]
+            if class_name == "NaiveCheatPlayer":
+                player = cheat.NaiveCheatPlayer()
+            elif class_name == "XRayCheatPlayer":
+                player = cheat.XRayCheatPlayer(
+                    probs_table=player_vars["probs_table"]
+                )
+            elif class_name == "AdaptiveCheatPlayer":
+                player = cheat.AdaptiveCheatPlayer(
+                    max_call_prob=player_vars["max_call_prob"],
+                    max_cheat_prob=player_vars["max_cheat_prob"],
+                )
+            players_all.append(player)
+    return game_config, players_all

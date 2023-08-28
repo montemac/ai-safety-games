@@ -1312,45 +1312,6 @@ def get_token_props(vocab: Dict[str, int]):
     return token_props, action_props
 
 
-def get_action_types(game):
-    """Get some stats about cheating in a game, assuming we're player
-    0."""
-    action_history = game.get_actions_from_state_history()
-    action_types = []
-    for state, action in zip(game.state_history, action_history):
-        if state.current_player == 0:
-            action_s = game.action_meanings[action]
-            ranks_in_hand = game.get_ranks_in_hand(state.hands[0])
-            allowed_ranks_in_hand = ranks_in_hand.intersection(
-                set(state.allowed_next_ranks)
-            )
-            can_play = len(allowed_ranks_in_hand) > 0
-            if action_s == "pass":
-                action_type = "pass"
-            else:
-                (
-                    claimed_rank,
-                    played_rank,
-                    is_call,
-                ) = game.get_fields_from_play_card_action(action_s)
-                if is_call:
-                    action_type = "call"
-                else:
-                    if (
-                        claimed_rank not in state.allowed_next_ranks
-                        or played_rank not in ranks_in_hand
-                    ):
-                        action_type = "error"
-                    elif claimed_rank == played_rank:
-                        action_type = "play"
-                    else:
-                        action_type = "cheat"
-            action_types.append(
-                {"action_type": action_type, "can_play": can_play}
-            )
-    return pd.DataFrame(action_types)
-
-
 def run(
     game: CheatGame,
     players: list[CheatPlayer],

@@ -64,26 +64,9 @@ model.process_weights_(
     fold_ln=True, center_writing_weights=False, center_unembed=True
 )
 
-with open(os.path.join(config.dataset_folder, "config.pkl"), "rb") as file:
-    config_dict = pickle.load(file)
-    game_config = cheat.CheatConfig(**config_dict["game.config"])
-    # Load players (don't save classes in case they have changed a bit
-    # and loading breaks)
-    players_all = []
-    for class_str, player_vars in config_dict["players"]:
-        class_name = class_str.split("'")[1].split(".")[-1]
-        if class_name == "NaiveCheatPlayer":
-            player = cheat.NaiveCheatPlayer()
-        elif class_name == "XRayCheatPlayer":
-            player = cheat.XRayCheatPlayer(
-                probs_table=player_vars["probs_table"]
-            )
-        elif class_name == "AdaptiveCheatPlayer":
-            player = cheat.AdaptiveCheatPlayer(
-                max_call_prob=player_vars["max_call_prob"],
-                max_cheat_prob=player_vars["max_cheat_prob"],
-            )
-        players_all.append(player)
+game_config, players_all = cheat_utils.load_config_and_players_from_dataset(
+    config.dataset_folder
+)
 
 game = cheat.CheatGame(config=game_config)
 vocab, action_vocab = game.get_token_vocab()
@@ -479,11 +462,11 @@ test_game_config.penalize_wrong_played_card = True
 
 goal_score = 5
 margins_list = []
-action_stats_list = []
+cheat_rates_list = []
 # for player in [results.model] + test_players:
 player = model
 for goal_score in tqdm(np.linspace(-4, 4, 20)):
-    margins, action_types = cheat_utils.run_test_games(
+    margins, cheat_rate = cheat_utils.run_test_games(
         model=player,
         game_config=game_config,
         num_games=500,
@@ -494,7 +477,8 @@ for goal_score in tqdm(np.linspace(-4, 4, 20)):
         players=test_players,
         seed=0,
         show_progress=True,
-        post_proc_func=cheat.get_action_types,
+        map_func=cheat_utils.get_action_types,
+        reduce_func=cheat_utils.get_cheat_rate,
     )
     margins_list.append(
         {
@@ -503,26 +487,16 @@ for goal_score in tqdm(np.linspace(-4, 4, 20)):
             "win_rate": (margins > 0).mean(),
         }
     )
-    actions_df_this = (
-        pd.concat(action_types)
-        .reset_index()
-        .groupby(["can_play", "action_type"])
-        .count()
-    )
-    actions_df_this["goal_score"] = goal_score
-    action_stats_list.append(
-        actions_df_this.reset_index().rename(columns={"index": "count"})
+    cheat_rates_list.append(
+        {"goal_score": goal_score, "cheat_rate": cheat_rate}
     )
 margins_df = pd.DataFrame(margins_list)
-action_types_df = pd.concat(action_stats_list)
+cheat_rates = pd.DataFrame(cheat_rates_list).set_index("goal_score")[
+    "cheat_rate"
+]
+
 
 # %%
-action_stats_all = action_types_df.groupby(["goal_score", "action_type"])[
-    "count"
-].sum()
-cheat_counts = action_stats_all.loc[(slice(None), "cheat")]
-all_counts = action_stats_all.groupby("goal_score").sum()
-cheat_rates = cheat_counts / all_counts
 perf_data_score = pd.DataFrame(
     {
         "cheat_rate": cheat_rates,

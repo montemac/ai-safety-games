@@ -30,6 +30,11 @@ game_filter = None
 # %%
 # Test cheat penalties
 RESULTS_RANGE = ("20230827T002903", "20230827T060501")
+GOAL_SCORE = 5
+# TODO: this should be in config somewhere
+MAX_TURNS = 40
+
+# Get folders for results in range
 fns_all = list(glob.glob("cheat_train_results/*"))
 fns_in_range = [
     fn
@@ -39,7 +44,9 @@ fns_in_range = [
 
 # Load one-by-one and store key results
 results_list = []
+test_results_list = []
 for fn in tqdm(fns_in_range):
+    # Load training results
     with open(os.path.join(fn, "results.pkl"), "rb") as file:
         results = pickle.load(file)
     results_list.append(
@@ -59,23 +66,74 @@ for fn in tqdm(fns_in_range):
         )
     )
 
-# TODO: pull the cheat stats stuff from cheat_interp.py, move it into
-# cheat_utils.py, and use it here to get the stats for each model
+    # Load info about the dataset
+    (
+        game_config,
+        players_all,
+    ) = cheat_utils.load_config_and_players_from_dataset(
+        results["config"]["dataset_folder"]
+    )
 
-results_df = (
-    pd.concat(results_list)
-    .reset_index()
-    .sort_values(["cheat_penalty_weight", "cheat_penalty_apply_prob"])
+    # Create test players list
+    test_players = [
+        players_all[idx] for idx in results["config"]["test_player_inds"]
+    ]
+
+    # Play a bunch of test games and store results
+    margins, cheat_rate = cheat_utils.run_test_games(
+        model=results["training_results"]["model"],
+        game_config=game_config,
+        num_games=500,
+        goal_score=GOAL_SCORE,
+        max_turns=MAX_TURNS,
+        players=test_players,
+        seed=0,
+        show_progress=True,
+        map_func=cheat_utils.get_action_types,
+        reduce_func=cheat_utils.get_cheat_rate,
+    )
+    test_results_list.append(
+        {
+            "cheat_penalty_weight": results["config"]["cheat_penalty_weight"],
+            "cheat_penalty_apply_prob": results["config"][
+                "cheat_penalty_apply_prob"
+            ],
+            "goal_score": GOAL_SCORE,
+            "win_rate": (margins > 0).mean(),
+            "cheat_rate": cheat_rate,
+        }
+    )
+
+test_results_df = pd.DataFrame(test_results_list).sort_values(
+    ["cheat_penalty_weight", "cheat_penalty_apply_prob"]
 )
-px.line(
-    results_df,
-    x="index",
-    y="win_rate",
-    color="cheat_penalty_weight",
+
+# results_df = (
+#     pd.concat(results_list)
+#     .reset_index()
+#     .sort_values(["cheat_penalty_weight", "cheat_penalty_apply_prob"])
+# )
+# px.line(
+#     results_df,
+#     x="index",
+#     y="win_rate",
+#     color="cheat_penalty_weight",
+#     facet_col="cheat_penalty_apply_prob",
+# )
+
+# %%
+# Visualize results
+px.scatter(
+    test_results_df,
+    x="cheat_penalty_weight",
+    y=["win_rate", "cheat_rate"],
     facet_col="cheat_penalty_apply_prob",
+    log_x=True,
 )
+
 
 #################################################################################
+
 
 # %%
 # Load some stuff about the dataset, and the model to test
