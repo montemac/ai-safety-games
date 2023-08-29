@@ -57,6 +57,7 @@ class CheatTrainingConfig:
     d_model: int
     d_head: int
     attn_only: bool
+    n_ctx: int
     epochs: int
     batch_size: int
     lr: float
@@ -256,7 +257,7 @@ def train(config: CheatTrainingConfig):
             act_fn="relu",
             device=config.device,
             seed=config.seed,
-            n_ctx=game_data.game_data.seq_lens.max().item(),
+            n_ctx=config.n_ctx,
             attn_only=config.attn_only,
         ),
         st_cfg=ScoreTransformerConfig(
@@ -353,7 +354,7 @@ def train(config: CheatTrainingConfig):
                     do_penalize = do_penalize * mask[:, :, None]
                 if do_penalize.sum() > 0:
                     cheat_penalty = (
-                        -(log_probs * do_penalize).sum() / do_penalize.sum()
+                        (log_probs * do_penalize).sum() / do_penalize.sum()
                     ) * config.cheat_penalty_weight
                 else:
                     cheat_penalty = 0
@@ -478,17 +479,17 @@ def get_action_types(game):
 def get_cheat_rate(action_types):
     """Reduce a list of action types for individual games to an overall
     cheat rate."""
-    cheat_count = (
-        pd.concat(action_types)
-        .reset_index()
-        .groupby("action_type")
-        .count()
-        .loc["cheat"]
+    action_counts = (
+        pd.concat(action_types).reset_index().groupby("action_type").count()
     )
-    all_count = sum(
-        [action_types_this.shape[0] for action_types_this in action_types]
-    )
-    return (cheat_count / all_count).values[0]
+    if "cheat" not in action_counts.index:
+        return 0
+    else:
+        cheat_count = action_counts.loc["cheat"]
+        all_count = sum(
+            [action_types_this.shape[0] for action_types_this in action_types]
+        )
+        return (cheat_count / all_count).values[0]
 
 
 def run_test_games(

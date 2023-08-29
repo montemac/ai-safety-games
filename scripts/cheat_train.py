@@ -16,100 +16,111 @@ _ = t.set_grad_enabled(True)
 
 
 # %%
-# Pre-init the cached game data
+# Load game data and train models!
+
+# Setup constants
 # DATASET_FOLDER = "../datasets/random_dataset_20230731T001342"
 DATASET_FOLDER = "../datasets/random_dataset_20230815T235622"
 DEVICE = "cuda:0"
 SEQUENCE_MODE = "tokens_score"
 
-
-# %%
-# Load game data
 INCLUDED_PLAYERS = [0, 3]
+CHEATING_PLAYERS = [3]
+INCLUDE_CHEAT_RATES = [0.0, 0.01, 0.03, 0.1, 0.3, 1.0]
 
+# CHEAT_PENALTY_WEIGHTS = [0.1, 0.3, 1.0, 3.0, 10.0, 30, 100]
+# CHEAT_PENALTY_APPLY_PROBS = [0.01, 0.03, 0.1, 0.3, 1.0]
+CHEAT_PENALTY_WEIGHTS = [0.0]
+CHEAT_PENALTY_APPLY_PROBS = [0.0]
 
-def game_filter(summary_lists: Dict[str, List[Any]]) -> List[int]:
-    """Filter out games that don't match criteria"""
-    inds = []
-    for idx, player_inds in enumerate(summary_lists["player_indices"]):
-        if all([player_ind in INCLUDED_PLAYERS for player_ind in player_inds]):
-            inds.append(idx)
-    return inds
-
-
-game_data = cheat_utils.load_game_data(
-    dataset_folder=DATASET_FOLDER,
-    sequence_mode=SEQUENCE_MODE,
-    game_filter=game_filter,
-    device=DEVICE,
-)
-
-# %%
-# Quick dataset analysis
-loaded_summary = game_data.summary.iloc[game_data.loaded_game_inds]
-player_tuples = loaded_summary["player_indices"].apply(lambda x: tuple(x))
-first_player = player_tuples.apply(lambda x: x[0]).rename("first_player")
-
-
-def scores_to_win_pos(scores):
-    """Convert scores to winning player position"""
-    scores = [s for idx, s in scores]
-    arg_sort = np.argsort(scores)
-    if scores[arg_sort[-1]] == scores[arg_sort[-2]]:
-        return -1
-    else:
-        return arg_sort[-1]
-
-
-winning_pos = (
-    loaded_summary["scores"].apply(scores_to_win_pos).rename("winning_pos")
-)
-
-win_rate_by_first_player = (winning_pos == 0).groupby([first_player]).mean()
-
-
-# %%
-# Train using new high-level function
-# Train with a variety of cheat penalty settings
-CHEAT_PENALTY_WEIGHTS = [0.1, 0.3, 1.0, 3.0, 10.0, 30, 100]
-CHEAT_PENALTY_APPLY_PROBS = [0.01, 0.03, 0.1, 0.3, 1.0]
 results_list = []
-for cheat_penalty_weight in tqdm(CHEAT_PENALTY_WEIGHTS):
-    for cheat_penalty_apply_prob in tqdm(CHEAT_PENALTY_APPLY_PROBS):
-        results, game_data, test_func = cheat_utils.train(
-            cheat_utils.CheatTrainingConfig(
-                dataset_folder=DATASET_FOLDER,
-                sequence_mode=SEQUENCE_MODE,
-                game_filter=game_filter,
-                device=DEVICE,
-                cached_game_data=game_data,
-                train_fraction=0.99,
-                n_layers=1,
-                d_model=64,
-                d_head=16,
-                attn_only=True,
-                epochs=10,
-                batch_size=1000,
-                lr=0.001,
-                # lr_schedule=("cosine_with_warmup", {"warmup_fraction": 0.05}),
-                lr_schedule=None,
-                weight_decay=0,
-                log_period=50000,
-                seed=1,
-                test_player_inds=INCLUDED_PLAYERS,
-                test_goal_scores=[5],
-                cheat_penalty_weight=cheat_penalty_weight,
-                cheat_penalty_apply_prob=cheat_penalty_apply_prob,
-                cheat_penalty_min_prob=0.1,
+for include_cheat_rate in tqdm(INCLUDE_CHEAT_RATES):
+
+    def game_filter(summary_lists: Dict[str, List[Any]]) -> List[int]:
+        """Filter out games that don't match criteria"""
+        inds = []
+        for idx, player_inds in enumerate(summary_lists["player_indices"]):
+            if all(
+                [player_ind in INCLUDED_PLAYERS for player_ind in player_inds]
+            ):
+                if any(
+                    player_ind in CHEATING_PLAYERS
+                    for player_ind in player_inds
+                ):
+                    if np.random.rand() < include_cheat_rate:
+                        inds.append(idx)
+                else:
+                    inds.append(idx)
+        return inds
+
+    game_data = cheat_utils.load_game_data(
+        dataset_folder=DATASET_FOLDER,
+        sequence_mode=SEQUENCE_MODE,
+        game_filter=game_filter,
+        device=DEVICE,
+    )
+
+    # Quick dataset analysis
+    # loaded_summary = game_data.summary.iloc[game_data.loaded_game_inds]
+    # player_tuples = loaded_summary["player_indices"].apply(lambda x: tuple(x))
+    # first_player = player_tuples.apply(lambda x: x[0]).rename("first_player")
+
+    # def scores_to_win_pos(scores):
+    #     """Convert scores to winning player position"""
+    #     scores = [s for idx, s in scores]
+    #     arg_sort = np.argsort(scores)
+    #     if scores[arg_sort[-1]] == scores[arg_sort[-2]]:
+    #         return -1
+    #     else:
+    #         return arg_sort[-1]
+
+    # winning_pos = (
+    #     loaded_summary["scores"].apply(scores_to_win_pos).rename("winning_pos")
+    # )
+
+    # win_rate_by_first_player = (winning_pos == 0).groupby([first_player]).mean()
+
+    # Train using new high-level function
+    for cheat_penalty_weight in tqdm(CHEAT_PENALTY_WEIGHTS):
+        for cheat_penalty_apply_prob in tqdm(CHEAT_PENALTY_APPLY_PROBS):
+            results, game_data, test_func = cheat_utils.train(
+                cheat_utils.CheatTrainingConfig(
+                    dataset_folder=DATASET_FOLDER,
+                    sequence_mode=SEQUENCE_MODE,
+                    game_filter=game_filter,
+                    device=DEVICE,
+                    cached_game_data=game_data,
+                    train_fraction=0.99,
+                    n_layers=1,
+                    d_model=64,
+                    d_head=16,
+                    attn_only=True,
+                    n_ctx=199,  # TODO: don't make this a constant!
+                    # epochs=10,
+                    epochs=int(10 * 125000 / len(game_data.loaded_game_inds)),
+                    batch_size=1000,
+                    lr=0.001,
+                    # lr_schedule=("cosine_with_warmup", {"warmup_fraction": 0.05}),
+                    lr_schedule=None,
+                    weight_decay=0,
+                    log_period=50000,
+                    seed=1,
+                    test_player_inds=INCLUDED_PLAYERS,
+                    test_goal_scores=[0, 5],
+                    cheat_penalty_weight=cheat_penalty_weight,
+                    cheat_penalty_apply_prob=cheat_penalty_apply_prob,
+                    cheat_penalty_min_prob=0.1,
+                )
             )
-        )
-        results_list.append(
-            {
-                "cheat_penalty_weight": cheat_penalty_weight,
-                "cheat_penalty_apply_prob": cheat_penalty_apply_prob,
-                "results": results,
-            }
-        )
+            results_list.append(
+                {
+                    "include_cheat_rate": include_cheat_rate,
+                    "cheat_penalty_weight": cheat_penalty_weight,
+                    "cheat_penalty_apply_prob": cheat_penalty_apply_prob,
+                    "num_games": len(game_data.loaded_game_inds),
+                    "results": results,
+                }
+            )
 
 
 # %%
@@ -122,6 +133,7 @@ px.line(
         "loss_test",
         # "test_margin_mean_goal_2",
         # "test_margin_mean_goal_5",
+        "test_win_rate_goal_0",
         "test_win_rate_goal_5",
     ],
     title="Training loss",

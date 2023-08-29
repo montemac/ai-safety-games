@@ -29,7 +29,9 @@ game_filter = None
 
 # %%
 # Test cheat penalties
-RESULTS_RANGE = ("20230827T002903", "20230827T060501")
+# With bug that INCREASED the cheat rates!
+# RESULTS_RANGE = ("20230827T002903", "20230827T060501")
+RESULTS_RANGE = ("20230827T234948", "20230828T053121")
 GOAL_SCORE = 5
 # TODO: this should be in config somewhere
 MAX_TURNS = 40
@@ -123,14 +125,38 @@ test_results_df = pd.DataFrame(test_results_list).sort_values(
 
 # %%
 # Visualize results
-px.scatter(
-    test_results_df,
-    x="cheat_penalty_weight",
-    y=["win_rate", "cheat_rate"],
-    facet_col="cheat_penalty_apply_prob",
-    log_x=True,
-)
+plot_df = test_results_df.melt(
+    id_vars=["cheat_penalty_weight", "cheat_penalty_apply_prob"],
+    value_vars=["win_rate", "cheat_rate"],
+).rename({"variable": "quantity", "value": "rate"}, axis=1)
 
+# px.line(
+#     plot_df,
+#     x="cheat_penalty_weight",
+#     y="rate",
+#     color="cheat_penalty_apply_prob",
+#     facet_col="quantity",
+#     log_x=True,
+# ).show()
+
+# px.scatter(
+#     test_results_df,
+#     x="cheat_rate",
+#     y="win_rate",
+#     color=np.log10(test_results_df["cheat_penalty_weight"]),
+#     size=np.log10(test_results_df["cheat_penalty_apply_prob"]) + 3,
+#     hover_data=["cheat_penalty_weight", "cheat_penalty_apply_prob"],
+# ).show()
+
+px.line(
+    test_results_df,
+    x="cheat_rate",
+    y="win_rate",
+    # color=np.log10(test_results_df["cheat_penalty_weight"]),
+    color="cheat_penalty_apply_prob",
+).show()
+
+perf_data_penalize = test_results_df[
 
 #################################################################################
 
