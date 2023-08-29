@@ -15,6 +15,7 @@ import pandas as pd
 import torch as t
 from tqdm.auto import tqdm
 import plotly.express as px
+import plotly.graph_objects as go
 
 from ai_safety_games import cheat, utils, training, cheat_utils
 from ai_safety_games.ScoreTransformer import ScoreTransformer
@@ -41,8 +42,20 @@ FOLDERS = [
     "20230828T160534",
     "20230828T161917",
     "20230828T163421",
+] + [
+    "20230828T202053",
+    "20230828T203332",
+    "20230828T204618",
+    "20230828T205926",
+    "20230828T211249",
 ]
-INCLUDE_CHEAT_RATES = [0.0, 0.01, 0.03, 0.1, 0.3, 1.0]
+INCLUDE_CHEAT_RATES = [0.0, 0.01, 0.03, 0.1, 0.3, 1.0] + [
+    0.02,
+    0.05,
+    0.15,
+    0.2,
+    0.25,
+]
 
 filter_test_results_list = []
 for folder, include_cheat_rate in tqdm(
@@ -92,6 +105,10 @@ for folder, include_cheat_rate in tqdm(
 filter_test_results_df = pd.DataFrame(filter_test_results_list).sort_values(
     "include_cheat_rate"
 )
+
+perf_data_filter = filter_test_results_df[
+    ["cheat_rate", "win_rate", "include_cheat_rate"]
+].reset_index(drop=True)
 
 
 # %%
@@ -353,6 +370,7 @@ perf_data_offset = pd.DataFrame(
 # ----------------------------------------------------------------------------
 perf_data = pd.concat(
     [
+        perf_data_filter.assign(intervention="filter training data"),
         perf_data_penalize.assign(intervention="penalize in training"),
         perf_data_score.assign(intervention="change prompt"),
         perf_data_offset.assign(intervention="increase pass prob")[
@@ -377,6 +395,12 @@ with open("cheat_eval_results.pkl", "rb") as file:
 perf_data = save_dict["perf_data"]
 penalize_test_results_df = save_dict["penalize_data"]
 
+# Pareto front
+perf_sorted = perf_data.sort_values(["cheat_rate"])
+perf_pareto = perf_sorted[
+    perf_sorted["win_rate"] >= perf_sorted["win_rate"].cummax()
+]
+
 fig = px.line(
     perf_data,
     x="cheat_rate",
@@ -386,6 +410,17 @@ fig = px.line(
     labels={"cheat_rate": "Deception rate", "win_rate": "Win rate"},
 )
 fig.update_traces(mode="markers")
+# Add a dashed line tracing the pareto front
+fig.add_trace(
+    go.Scatter(
+        x=perf_pareto["cheat_rate"],
+        y=perf_pareto["win_rate"],
+        mode="lines",
+        line=dict(color="black", dash="dash"),
+        showlegend=True,
+        name="Pareto front",
+    )
+)
 # Make x and y axes show percentages with 1 decimal place
 fig.update_layout(
     xaxis_tickformat=".0%",
