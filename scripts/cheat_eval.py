@@ -30,32 +30,46 @@ game_filter = None
 GOAL_SCORE = 5
 # TODO: this should be in config somewhere
 MAX_TURNS = 40
+NUM_GAMES = 2000
 
 
 # %%
 # Filtering of training data
 # ----------------------------------------------------------------------------
-FOLDERS = [
-    "20230828T152710",
-    "20230828T153956",
-    "20230828T155240",
-    "20230828T160534",
-    "20230828T161917",
-    "20230828T163421",
-] + [
-    "20230828T202053",
-    "20230828T203332",
-    "20230828T204618",
-    "20230828T205926",
-    "20230828T211249",
-]
-INCLUDE_CHEAT_RATES = [0.0, 0.01, 0.03, 0.1, 0.3, 1.0] + [
-    0.02,
-    0.05,
-    0.15,
-    0.2,
-    0.25,
-]
+FOLDERS = (
+    [
+        "20230828T152710",
+        "20230828T153956",
+        "20230828T155240",
+        "20230828T160534",
+        "20230828T161917",
+        "20230828T163421",
+    ]
+    + [
+        "20230828T202053",
+        "20230828T203332",
+        "20230828T204618",
+        "20230828T205926",
+        "20230828T211249",
+    ]
+    + [
+        "20230828T230224",
+        "20230828T231500",
+        "20230828T232745",
+        "20230828T234022",
+    ]
+)
+INCLUDE_CHEAT_RATES = (
+    [0.0, 0.01, 0.03, 0.1, 0.3, 1.0]
+    + [
+        0.02,
+        0.05,
+        0.15,
+        0.2,
+        0.25,
+    ]
+    + [0.001, 0.002, 0.004, 0.007]
+)
 
 filter_test_results_list = []
 for folder, include_cheat_rate in tqdm(
@@ -84,7 +98,7 @@ for folder, include_cheat_rate in tqdm(
     margins, cheat_rate = cheat_utils.run_test_games(
         model=results["training_results"]["model"],
         game_config=game_config,
-        num_games=2000,
+        num_games=NUM_GAMES,
         goal_score=GOAL_SCORE,
         max_turns=MAX_TURNS,
         players=test_players,
@@ -168,7 +182,7 @@ for fn in tqdm(fns_in_range):
     margins, cheat_rate = cheat_utils.run_test_games(
         model=results["training_results"]["model"],
         game_config=game_config,
-        num_games=500,
+        num_games=NUM_GAMES,
         goal_score=GOAL_SCORE,
         max_turns=MAX_TURNS,
         players=test_players,
@@ -251,9 +265,12 @@ TRAINING_RESULTS_FN = "cheat_train_results/20230817T151856/results.pkl"
 
 with open(TRAINING_RESULTS_FN, "rb") as file:
     results_all = pickle.load(file)
-config = cheat_utils.CheatTrainingConfig(**results_all["config"])
 results = training.TrainingResults(**results_all["training_results"])
 model = results.model
+# Fix
+if "n_ctx" not in results_all["config"]:
+    results_all["config"]["n_ctx"] = model.cfg.n_ctx
+config = cheat_utils.CheatTrainingConfig(**results_all["config"])
 
 game_config, players_all = cheat_utils.load_config_and_players_from_dataset(
     config.dataset_folder
@@ -270,7 +287,7 @@ for goal_score in tqdm(np.linspace(-GOAL_SCORE, GOAL_SCORE, 20)):
     margins, cheat_rate = cheat_utils.run_test_games(
         model=player,
         game_config=game_config,
-        num_games=500,
+        num_games=NUM_GAMES,
         goal_score=goal_score,
         max_turns=MAX_TURNS,
         players=test_players,
@@ -332,8 +349,8 @@ for pass_offset in tqdm(np.linspace(-1, 5, 20)):
         margins, cheat_rate = cheat_utils.run_test_games(
             model=model,
             game_config=game_config,
-            num_games=500,
-            goal_score=5,
+            num_games=NUM_GAMES,
+            goal_score=GOAL_SCORE,
             max_turns=max(
                 results_all["config"]["cached_game_data"]["summary"][
                     "turn_cnt"
@@ -401,6 +418,7 @@ perf_pareto = perf_sorted[
     perf_sorted["win_rate"] >= perf_sorted["win_rate"].cummax()
 ]
 
+# Plot all intervention results
 fig = px.line(
     perf_data,
     x="cheat_rate",
@@ -433,5 +451,28 @@ fig.update_layout(
     legend=dict(
         orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
     )
+)
+fig.show()
+
+# Plots interesting stuff for each intervention
+# Training data filtering
+fig = px.scatter(
+    perf_data[
+        (perf_data["intervention"] == "filter training data")
+        & (perf_data["include_cheat_rate"] > 0)
+    ],
+    x="include_cheat_rate",
+    y="cheat_rate",
+    log_x=True,
+    trendline="ols",
+    trendline_options=dict(log_x=True),
+    title="Cheat rate vs chance of including cheating training data",
+)
+fig.update_layout(
+    xaxis_tickformat=".001%",
+    yaxis_tickformat=".1%",
+)
+fig.update_layout(
+    width=700,
 )
 fig.show()
