@@ -163,3 +163,4 @@ cython_debug/
 datasets
 *_output
 *_results
+*results.pkl

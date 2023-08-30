@@ -1,6 +1,7 @@
 # %%
 # Imports, etc
 from typing import Dict, List, Any
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -26,7 +27,8 @@ SEQUENCE_MODE = "tokens_score"
 
 INCLUDED_PLAYERS = [0, 3]
 CHEATING_PLAYERS = [3]
-INCLUDE_CHEAT_RATES = [0.001, 0.002, 0.004, 0.007]
+# INCLUDE_CHEAT_RATES = [0.001, 0.002, 0.004, 0.007]
+INCLUDE_CHEAT_RATES = [1.0]
 
 # CHEAT_PENALTY_WEIGHTS = [0.1, 0.3, 1.0, 3.0, 10.0, 30, 100]
 # CHEAT_PENALTY_APPLY_PROBS = [0.01, 0.03, 0.1, 0.3, 1.0]
@@ -35,30 +37,30 @@ CHEAT_PENALTY_APPLY_PROBS = [0.0]
 
 results_list = []
 for include_cheat_rate in tqdm(INCLUDE_CHEAT_RATES):
+    # TEMP: comment out for now
+    # def game_filter(summary_lists: Dict[str, List[Any]]) -> List[int]:
+    #     """Filter out games that don't match criteria"""
+    #     inds = []
+    #     for idx, player_inds in enumerate(summary_lists["player_indices"]):
+    #         if all(
+    #             [player_ind in INCLUDED_PLAYERS for player_ind in player_inds]
+    #         ):
+    #             if any(
+    #                 player_ind in CHEATING_PLAYERS
+    #                 for player_ind in player_inds
+    #             ):
+    #                 if np.random.rand() < include_cheat_rate:
+    #                     inds.append(idx)
+    #             else:
+    #                 inds.append(idx)
+    #     return inds
 
-    def game_filter(summary_lists: Dict[str, List[Any]]) -> List[int]:
-        """Filter out games that don't match criteria"""
-        inds = []
-        for idx, player_inds in enumerate(summary_lists["player_indices"]):
-            if all(
-                [player_ind in INCLUDED_PLAYERS for player_ind in player_inds]
-            ):
-                if any(
-                    player_ind in CHEATING_PLAYERS
-                    for player_ind in player_inds
-                ):
-                    if np.random.rand() < include_cheat_rate:
-                        inds.append(idx)
-                else:
-                    inds.append(idx)
-        return inds
-
-    game_data = cheat_utils.load_game_data(
-        dataset_folder=DATASET_FOLDER,
-        sequence_mode=SEQUENCE_MODE,
-        game_filter=game_filter,
-        device=DEVICE,
-    )
+    # game_data = cheat_utils.load_game_data(
+    #     dataset_folder=DATASET_FOLDER,
+    #     sequence_mode=SEQUENCE_MODE,
+    #     game_filter=game_filter,
+    #     device=DEVICE,
+    # )
 
     # Quick dataset analysis
     # loaded_summary = game_data.summary.iloc[game_data.loaded_game_inds]
@@ -92,18 +94,18 @@ for include_cheat_rate in tqdm(INCLUDE_CHEAT_RATES):
                     cached_game_data=game_data,
                     train_fraction=0.99,
                     n_layers=1,
-                    d_model=64,
-                    d_head=16,
+                    d_model=16,
+                    d_head=8,
                     attn_only=True,
                     n_ctx=199,  # TODO: don't make this a constant!
-                    # epochs=10,
-                    epochs=int(10 * 125000 / len(game_data.loaded_game_inds)),
+                    epochs=200,
+                    # epochs=int(10 * 125000 / len(game_data.loaded_game_inds)),
                     batch_size=1000,
                     lr=0.001,
                     # lr_schedule=("cosine_with_warmup", {"warmup_fraction": 0.05}),
                     lr_schedule=None,
                     weight_decay=0,
-                    log_period=50000,
+                    log_period=500000,
                     seed=1,
                     test_player_inds=INCLUDED_PLAYERS,
                     test_goal_scores=[0, 5],
@@ -166,6 +168,56 @@ for player in [results.model] + test_players:
     )
 margins_df = pd.DataFrame(margins_list)
 
+
+# %%
+# TEMP: compare a few specific training runs
+RUNS = [
+    "20230829T170600",
+    "20230829T185516",
+    "20230829T205334",
+    "20230830T002809",
+    "20230830T020437",
+    "20230830T034643",
+    "20230830T052703",
+]
+results_list = []
+model_descs = []
+for run in RUNS:
+    with open(f"cheat_train_results/{run}/results.pkl", "rb") as file:
+        results = pickle.load(file)
+    model = results["training_results"]["model"]
+    model_descs.append(
+        f"{model.cfg.n_layers}L, "
+        f"D:{model.cfg.d_model}, "
+        f"H:{model.cfg.d_head}, "
+        f"C:{model.cfg.n_ctx}, "
+        f"A:{model.cfg.attn_only}"
+    )
+    results_list.append(results["training_results"]["results"])
+
+results_all = pd.concat(
+    results_list, axis=0, keys=model_descs, names=["model_desc"]
+).reset_index()
+
+for value_vars, title in [
+    (["loss_train", "loss_test"], "Loss"),
+    (["test_win_rate_goal_0", "test_win_rate_goal_5"], "Win rate"),
+]:
+    plot_df = results_all.melt(
+        id_vars=["model_desc", "batch"],
+        value_vars=value_vars,
+        var_name="indicator",
+        value_name="value",
+    )
+    px.line(
+        plot_df,
+        x="batch",
+        y="value",
+        color="model_desc",
+        facet_col="indicator",
+        facet_col_wrap=2,
+        title=title,
+    ).show()
 
 # %%
 # Imports, etc.
