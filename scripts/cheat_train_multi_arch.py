@@ -46,7 +46,7 @@ game_data = cheat_utils.load_game_data(
 
 # %%
 # Train models!
-ARCH_PARAMS = [(16, 16), (16, 8), (12, 12), (12, 6)]
+ARCH_PARAMS = [(32, 32), (16, 8), (12, 12)]
 
 for d_model, d_head in tqdm(ARCH_PARAMS):
     # Train using new high-level function
@@ -63,7 +63,7 @@ for d_model, d_head in tqdm(ARCH_PARAMS):
             d_head=d_head,
             attn_only=True,
             n_ctx=199,  # TODO: don't make this a constant!
-            epochs=200,
+            epochs=500,
             # epochs=int(10 * 125000 / len(game_data.loaded_game_inds)),
             batch_size=1000,
             lr=0.001,

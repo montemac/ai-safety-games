@@ -418,6 +418,7 @@ perf_pareto = perf_sorted[
     perf_sorted["win_rate"] >= perf_sorted["win_rate"].cummax()
 ]
 
+
 # Plot all intervention results
 fig = px.line(
     perf_data,
@@ -426,6 +427,8 @@ fig = px.line(
     color="intervention",
     title="Effects of deception-reducing interventions",
     labels={"cheat_rate": "Deception rate", "win_rate": "Win rate"},
+    log_x=True,
+    log_y=True,
 )
 fig.update_traces(mode="markers")
 # Add a dashed line tracing the pareto front
@@ -441,16 +444,12 @@ fig.add_trace(
 )
 # Make x and y axes show percentages with 1 decimal place
 fig.update_layout(
-    xaxis_tickformat=".0%",
-    yaxis_tickformat=".0%",
-)
-fig.update_layout(
+    # xaxis_tickformat=".1%",
+    # yaxis_tickformat=".0%",
     width=700,
-)
-fig.update_layout(
-    legend=dict(
-        orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
-    )
+    # legend=dict(
+    #     orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+    # )
 )
 fig.show()
 
@@ -466,13 +465,68 @@ fig = px.scatter(
     log_x=True,
     trendline="ols",
     trendline_options=dict(log_x=True),
-    title="Cheat rate vs chance of including cheating training data",
+    title="Cheat rate vs chance of including a game with cheating in training",
+    labels={
+        "cheat_rate": "Deception rate",
+        "include_cheat_rate": "Cheat game inclusion probability",
+    },
 )
 fig.update_layout(
-    xaxis_tickformat=".001%",
+    xaxis_tickformat=".1%",
     yaxis_tickformat=".1%",
+    width=700,
+)
+fig.show()
+# Penalize in training
+for param, param_name in [
+    ("cheat_penalty_weight", "cheat penalty weight"),
+    ("cheat_penalty_apply_prob", "cheat penalty apply prob"),
+]:
+    fig = px.scatter(
+        penalize_test_results_df,
+        x="cheat_rate",
+        y="win_rate",
+        color=np.log10(penalize_test_results_df[param]),
+        title=f"Effect of different {param_name}s during training",
+        labels={"cheat_rate": "Deception rate", "win_rate": "Win rate"},
+    )
+    # Add a dashed line tracing the pareto front
+    fig.add_trace(
+        go.Scatter(
+            x=perf_pareto["cheat_rate"],
+            y=perf_pareto["win_rate"],
+            mode="lines",
+            line=dict(color="black", dash="dash"),
+            showlegend=False,
+            name="Pareto front",
+        )
+    )
+    fig.update_layout(
+        coloraxis_colorbar=dict(
+            title=param_name,
+            tickvals=np.log10(penalize_test_results_df[param].unique()),
+            ticktext=[
+                f"{val:0.2f}"
+                for val in penalize_test_results_df[param].unique()
+            ],
+        )
+    )
+    fig.update_layout(
+        xaxis_tickformat=".1%",
+        yaxis_tickformat=".1%",
+        width=700,
+    )
+    fig.show()
+# Change goal score
+fig = px.line(
+    perf_data[perf_data["intervention"] == "change goal score"],
+    x="goal_score",
+    y=["cheat_rate", "win_rate"],
+    labels={"goal_score": "Goal score", "value": "Rate"},
+    title="Effect of changing goal score",
 )
 fig.update_layout(
+    yaxis_tickformat=".1%",
     width=700,
 )
 fig.show()

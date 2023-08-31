@@ -45,7 +45,10 @@ _ = t.set_grad_enabled(False)
 # Trained on win only
 # TRAINING_RESULTS_FN = "cheat_train_results/20230815T234841/results.pkl"
 # Small model, trained only on naive and 0.25/1.0 adaptive
-TRAINING_RESULTS_FN = "cheat_train_results/20230817T151856/results.pkl"
+# TRAINING_RESULTS_FN = "cheat_train_results/20230817T151856/results.pkl"
+# Very small model, 1 head!
+TRAINING_RESULTS_FN = "cheat_train_results/20230830T002809/results.pkl"
+
 
 # Load model
 
@@ -80,6 +83,7 @@ action_pos_step = game_config.num_players * 2 + game.config.num_ranks
 
 # Token properties table
 token_props, action_props = cheat.get_token_props(vocab=vocab)
+token_str = pd.Series(token_props.index, index=token_props.index)
 
 
 # %%
@@ -381,7 +385,7 @@ def plot_attn_and_ov(tokens, token_strs, activs, ov, action_pos, actions):
     fig.show()
 
 
-action_ind = 1
+action_ind = 2
 plot_attn_and_ov(
     tokens=tokens,
     token_strs=token_strs,
