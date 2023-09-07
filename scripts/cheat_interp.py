@@ -62,7 +62,7 @@ game_filter = None
 with open(TRAINING_RESULTS_FN, "rb") as file:
     results_all = pickle.load(file)
 del results_all["config"]["n_ctx"]
-results_all["config"]["max_turns"] = 40  # TODO: don't hard code this
+results_all["config"]["max_turns"] = 40  # Wasn't stored in older models
 config = cheat_utils.CheatTrainingConfig(**results_all["config"])
 results = training.TrainingResults(**results_all["training_results"])
 model = results.model
@@ -79,12 +79,6 @@ game_config, players_all = cheat_utils.load_config_and_players_from_dataset(
 game = cheat.CheatGame(config=game_config)
 vocab, action_vocab = game.get_token_vocab()
 vocab_str = {idx: token_str for token_str, idx in vocab.items()}
-
-# Positions corresponding to actions
-first_action_pos = (
-    (game_config.num_players - 1) * 2 + 2 + game.config.num_ranks
-)
-action_pos_step = game_config.num_players * 2 + game.config.num_ranks
 
 # Token properties table
 token_props, action_props = cheat.get_token_props(vocab=vocab)
@@ -163,124 +157,6 @@ OV_df = pd.DataFrame(
 #     fig.show()
 
 # %%
-# Study positional embeddings
-QK_pos = einsum(
-    model.pos_embed_copy.W_pos,
-    W_QK,
-    model.pos_embed_copy.W_pos,
-    "pq dmq, h dmq dmk, pk dmk -> h pq pk",
-)
-
-QK_pos_tri = QK_pos.cpu().numpy()
-for head in range(QK_pos_tri.shape[0]):
-    tmp = QK_pos_tri[head, :, :]
-    tmp[np.triu_indices(QK_pos_tri.shape[1], 1)] = -np.inf
-
-# Role of each position in the cycle
-POS_CYCLE = np.array(
-    [
-        "action / BOG",
-        "result / SCORE",
-        "action_0",
-        "result_0",
-        "action_1",
-        "result_1",
-        "hand_0",
-        "hand_1",
-        "hand_2",
-        "hand_3",
-        "hand_4",
-        "hand_5",
-        "hand_6",
-        "hand_7",
-    ]
-)
-
-# For each head, iterate through destination positions relevant to
-# action predictions, and show the top-K source positions, sorted by their
-# QK_pos_tri value
-K = 5
-top_src_pos_list = []
-for head in range(QK_pos_tri.shape[0]):
-    for action_ind, dst_pos in enumerate(
-        range(first_action_pos - 1, QK_pos_tri.shape[1], action_pos_step)
-    ):
-        # Get the top-K source positions
-        sort_inds = QK_pos_tri[head, dst_pos, :].argsort()[::-1]
-        top_k_src_pos = sort_inds[:K]
-        # Get the QK_pos values for the top-K source positions
-        top_k_qk_pos = QK_pos_tri[head, dst_pos, top_k_src_pos]
-        # Put this into a DataFrame
-        top_src_pos_list.append(
-            pd.DataFrame(
-                {
-                    "head": head,
-                    "dst_pos": dst_pos,
-                    "src_pos": top_k_src_pos,
-                    "qk_val": top_k_qk_pos,
-                    "action_ind": action_ind,
-                }
-            )
-        )
-top_src_pos_df = pd.concat(top_src_pos_list).set_index(["head", "action_ind"])
-# Add a column for the dst and src position names take from POS_CYCLE
-top_src_pos_df["dst_pos_next_name"] = POS_CYCLE[
-    np.mod(top_src_pos_df.dst_pos + 1, len(POS_CYCLE))
-]
-top_src_pos_df["src_pos_name"] = POS_CYCLE[
-    np.mod(top_src_pos_df.src_pos, len(POS_CYCLE))
-]
-# Add column for the turn index of the source positions
-top_src_pos_df["src_pos_turn"] = (
-    top_src_pos_df.src_pos - first_action_pos
-) // action_pos_step + 1
-
-NUM_ACTIONS_PLOT = 5
-for head in range(QK_pos_tri.shape[0]):
-    last_action_pos = (
-        first_action_pos + (NUM_ACTIONS_PLOT - 1) * action_pos_step
-    )
-    fig = px.imshow(
-        QK_pos_tri[
-            head,
-            (first_action_pos - 1) : last_action_pos : action_pos_step,
-            :last_action_pos,
-        ],
-        color_continuous_scale="piyg",
-        color_continuous_midpoint=0,
-        title=f"QK_pos, head: {head}",
-    )
-    # Update x/y axis labels
-    fig.update_xaxes(
-        ticktext=np.tile(POS_CYCLE, NUM_ACTIONS_PLOT),
-        tickvals=np.arange(len(POS_CYCLE) * NUM_ACTIONS_PLOT),
-        tickangle=-45,
-        title_text="Source position",
-    )
-    fig.update_yaxes(
-        title_text="Action index",
-    )
-    fig.show()
-    print(
-        top_src_pos_df.loc[
-            (head, slice(NUM_ACTIONS_PLOT)),
-            ["src_pos_name", "src_pos_turn", "qk_val"],
-        ]
-    )
-
-
-# QK_pos_plot = QK_pos[1].cpu().numpy()
-# QK_pos_plot[np.triu_indices(QK_pos_plot.shape[0], -1)] = np.nan
-# QK_pos_plot = QK_pos_plot[(first_action_pos - 1) :: action_pos_step, :]
-# px.imshow(
-#     QK_pos_plot,
-#     color_continuous_scale="piyg",
-#     color_continuous_midpoint=0,
-#     aspect="auto",
-# ).show()
-
-
-# %%
 # Run a game, then turn the history into a token sequence and run it through the model
 SEED = 0
 GOAL_SCORE = 5
@@ -313,7 +189,7 @@ scores, winning_player, turn_cnt = cheat.run(
 print(game.print_state_history())
 
 # Turn history into a token sequence
-tokens, _, _ = cheat.get_seqs_from_state_history(
+tokens, first_action_pos, action_pos_step = cheat.get_seqs_from_state_history(
     game=game,
     vocab=vocab,
     state_history=game.state_history,
@@ -459,6 +335,124 @@ plot_attn_and_ov(
 # top_k_tokens
 
 # %%
+# Study positional embeddings
+QK_pos = einsum(
+    model.pos_embed_copy.W_pos,
+    W_QK,
+    model.pos_embed_copy.W_pos,
+    "pq dmq, h dmq dmk, pk dmk -> h pq pk",
+)
+
+QK_pos_tri = QK_pos.cpu().numpy()
+for head in range(QK_pos_tri.shape[0]):
+    tmp = QK_pos_tri[head, :, :]
+    tmp[np.triu_indices(QK_pos_tri.shape[1], 1)] = -np.inf
+
+# Role of each position in the cycle
+POS_CYCLE = np.array(
+    [
+        "action / BOG",
+        "result / SCORE",
+        "action_0",
+        "result_0",
+        "action_1",
+        "result_1",
+        "hand_0",
+        "hand_1",
+        "hand_2",
+        "hand_3",
+        "hand_4",
+        "hand_5",
+        "hand_6",
+        "hand_7",
+    ]
+)
+
+# For each head, iterate through destination positions relevant to
+# action predictions, and show the top-K source positions, sorted by their
+# QK_pos_tri value
+K = 5
+top_src_pos_list = []
+for head in range(QK_pos_tri.shape[0]):
+    for action_ind, dst_pos in enumerate(
+        range(first_action_pos - 1, QK_pos_tri.shape[1], action_pos_step)
+    ):
+        # Get the top-K source positions
+        sort_inds = QK_pos_tri[head, dst_pos, :].argsort()[::-1]
+        top_k_src_pos = sort_inds[:K]
+        # Get the QK_pos values for the top-K source positions
+        top_k_qk_pos = QK_pos_tri[head, dst_pos, top_k_src_pos]
+        # Put this into a DataFrame
+        top_src_pos_list.append(
+            pd.DataFrame(
+                {
+                    "head": head,
+                    "dst_pos": dst_pos,
+                    "src_pos": top_k_src_pos,
+                    "qk_val": top_k_qk_pos,
+                    "action_ind": action_ind,
+                }
+            )
+        )
+top_src_pos_df = pd.concat(top_src_pos_list).set_index(["head", "action_ind"])
+# Add a column for the dst and src position names take from POS_CYCLE
+top_src_pos_df["dst_pos_next_name"] = POS_CYCLE[
+    np.mod(top_src_pos_df.dst_pos + 1, len(POS_CYCLE))
+]
+top_src_pos_df["src_pos_name"] = POS_CYCLE[
+    np.mod(top_src_pos_df.src_pos, len(POS_CYCLE))
+]
+# Add column for the turn index of the source positions
+top_src_pos_df["src_pos_turn"] = (
+    top_src_pos_df.src_pos - first_action_pos
+) // action_pos_step + 1
+
+NUM_ACTIONS_PLOT = 5
+for head in range(QK_pos_tri.shape[0]):
+    last_action_pos = (
+        first_action_pos + (NUM_ACTIONS_PLOT - 1) * action_pos_step
+    )
+    fig = px.imshow(
+        QK_pos_tri[
+            head,
+            (first_action_pos - 1) : last_action_pos : action_pos_step,
+            :last_action_pos,
+        ],
+        color_continuous_scale="piyg",
+        color_continuous_midpoint=0,
+        title=f"QK_pos, head: {head}",
+    )
+    # Update x/y axis labels
+    fig.update_xaxes(
+        ticktext=np.tile(POS_CYCLE, NUM_ACTIONS_PLOT),
+        tickvals=np.arange(len(POS_CYCLE) * NUM_ACTIONS_PLOT),
+        tickangle=-45,
+        title_text="Source position",
+    )
+    fig.update_yaxes(
+        title_text="Action index",
+    )
+    fig.show()
+    print(
+        top_src_pos_df.loc[
+            (head, slice(NUM_ACTIONS_PLOT)),
+            ["src_pos_name", "src_pos_turn", "qk_val"],
+        ]
+    )
+
+
+# QK_pos_plot = QK_pos[1].cpu().numpy()
+# QK_pos_plot[np.triu_indices(QK_pos_plot.shape[0], -1)] = np.nan
+# QK_pos_plot = QK_pos_plot[(first_action_pos - 1) :: action_pos_step, :]
+# px.imshow(
+#     QK_pos_plot,
+#     color_continuous_scale="piyg",
+#     color_continuous_midpoint=0,
+#     aspect="auto",
+# ).show()
+
+
+# %%
 # Explore the embeddings a bit
 
 # First, PCA the positional embedding weights to get to a reasonable
@@ -502,6 +496,111 @@ csim_pos_tokens = sklearn.metrics.pairwise.cosine_similarity(
     model.token_embed.W_E.cpu().numpy(),
 )
 
+
+# %%
+# Calculate the equivalent QK and OV matrices based on the combined
+# token and position embeddings, of which only certain combinations are
+# possible.
+
+# Iterate over positions, and for each position, iterate over the
+# possible tokens at that position, storing each possible (pos, token)
+# tuple
+TOKENS_BY_POS_CYCLE = {
+    "action / BOG": ["BOG"]
+    + token_props[token_props["type"] == "player_action"].index.to_list(),
+    "result / SCORE": ["SCORE"]
+    + token_props[token_props["type"] == "player_result"].index.to_list(),
+    "action_0": ["PAD", "EOG"]
+    + token_props[
+        (token_props["type"] == "other_action") & (token_props["player"] == 0)
+    ].index.to_list(),
+    "result_0": ["PAD"]
+    + token_props[
+        (token_props["type"] == "other_result") & (token_props["player"] == 0)
+    ].index.to_list(),
+    "action_1": ["PAD"]
+    + token_props[
+        (token_props["type"] == "other_action") & (token_props["player"] == 1)
+    ].index.to_list(),
+    "result_1": ["PAD"]
+    + token_props[
+        (token_props["type"] == "other_result") & (token_props["player"] == 1)
+    ].index.to_list(),
+    "hand_0": token_props[
+        (token_props["type"] == "hand") & (token_props["hand_rank"] == 0)
+    ].index.to_list(),
+    "hand_1": token_props[
+        (token_props["type"] == "hand") & (token_props["hand_rank"] == 1)
+    ].index.to_list(),
+    "hand_2": token_props[
+        (token_props["type"] == "hand") & (token_props["hand_rank"] == 2)
+    ].index.to_list(),
+    "hand_3": token_props[
+        (token_props["type"] == "hand") & (token_props["hand_rank"] == 3)
+    ].index.to_list(),
+    "hand_4": token_props[
+        (token_props["type"] == "hand") & (token_props["hand_rank"] == 4)
+    ].index.to_list(),
+    "hand_5": token_props[
+        (token_props["type"] == "hand") & (token_props["hand_rank"] == 5)
+    ].index.to_list(),
+    "hand_6": token_props[
+        (token_props["type"] == "hand") & (token_props["hand_rank"] == 6)
+    ].index.to_list(),
+    "hand_7": token_props[
+        (token_props["type"] == "hand") & (token_props["hand_rank"] == 7)
+    ].index.to_list(),
+}
+
+assert "EOH" not in vocab, "Need to update if using EOH token"
+
+src_pos_token_list = []
+dst_pos_token_list = []
+for pos in range(model.pos_embed_copy.W_pos.shape[0]):
+    pos_cycle_name = POS_CYCLE[pos % len(POS_CYCLE)]
+    tokens_this = TOKENS_BY_POS_CYCLE[pos_cycle_name]
+    pos_token_this = [(pos, vocab[token]) for token in tokens_this]
+    src_pos_token_list.extend(pos_token_this)
+    if (pos - first_action_pos) % action_pos_step == (action_pos_step - 1):
+        dst_pos_token_list.extend(pos_token_this)
+
+# Extract the position and token inds as vectors
+src_pos, src_tok = t.tensor(src_pos_token_list).T.to(model.cfg.device)
+dst_pos, dst_tok = t.tensor(dst_pos_token_list).T.to(model.cfg.device)
+
+# Calculate the combined embeddings of each possible source and
+# destination token/pos
+W_e_comb_src = (
+    model.pos_embed_copy.W_pos[src_pos, :] + model.token_embed.W_E[src_tok, :]
+)
+W_e_comb_dst = (
+    model.pos_embed_copy.W_pos[dst_pos, :] + model.token_embed.W_E[dst_tok, :]
+)
+
+# Calculate the combined QK matrix
+QK_comb = einsum(
+    W_e_comb_dst,
+    W_QK,
+    W_e_comb_src,
+    "ptq dmq, h dmq dmk, ptk dmk -> h ptq ptk",
+)
+# Enforce causality
+QK_comb = t.where(
+    (dst_pos[:, None] >= src_pos[None, :])[None, :, :],
+    QK_comb,
+    t.tensor(-np.inf).to(model.cfg.device),
+)
+
+# Calculate the combined OV matrix
+OV_comb = einsum(
+    model.unembed.W_U,
+    W_OV,
+    W_e_comb_src,
+    "dmo da, h dmo dmv, ptv dmv -> h da ptv",
+)
+
+
+# ---------------------------------------------------------------------------
 
 # %%
 # Get some performance data
