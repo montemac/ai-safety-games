@@ -306,7 +306,7 @@ for value_vars, title in [
 #         next_best_score = np.max(scores[scores != 0])
 #         scores[scores == 0] = -next_best_score
 #         # Get token sequences
-#         tokens_this = cheat.get_seqs_from_state_history(
+#         tokens_this, _, _ = cheat.get_seqs_from_state_history(
 #             game=game, vocab=vocab, state_history=state_history
 #         )
 #         tokens_list.extend([row for row in tokens_this])

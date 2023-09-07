@@ -311,7 +311,7 @@ scores, winning_player, turn_cnt = cheat.run(
 print(game.print_state_history())
 
 # Turn history into a token sequence
-tokens = cheat.get_seqs_from_state_history(
+tokens, _, _ = cheat.get_seqs_from_state_history(
     game=game,
     vocab=vocab,
     state_history=game.state_history,

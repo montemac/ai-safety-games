@@ -782,7 +782,7 @@ def get_seqs_from_state_history(
     state_history: List[CheatState],
     players_to_return: Optional[List[int]] = None,
     include_hand_end: bool = False,
-) -> Int64[t.Tensor, "batch pos"]:
+) -> Tuple[Int64[t.Tensor, "batch pos"], int, int]:
     """Function to represent a game state history as a batch of token
     sequences, one sequence per game player.
 
@@ -1034,7 +1034,7 @@ class ScoreTransformerCheatPlayer(CheatPlayer):
         """Build the tokens tensor from scratch, which is simple but
         inefficient. TODO: build the sequence turn-by-turn, only
         incorporating the new information at each call to step."""
-        tokens = get_seqs_from_state_history(
+        tokens, _, _ = get_seqs_from_state_history(
             game=game,
             vocab=self.vocab,
             state_history=game.state_history,
