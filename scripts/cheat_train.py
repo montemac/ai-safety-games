@@ -183,6 +183,9 @@ RUNS = [
     "20230830T151902",
     "20230830T170157",
     "20230830T185358",
+    "20230831T023701",
+    "20230831T072206",
+    "20230831T113929",
 ]
 results_list = []
 model_descs = []
@@ -196,6 +199,7 @@ for run in RUNS:
         f"H:{model.cfg.d_head}, "
         f"C:{model.cfg.n_ctx}, "
         f"A:{model.cfg.attn_only}"
+        f"<br>{run}"
     )
     results_list.append(results["training_results"]["results"])
 

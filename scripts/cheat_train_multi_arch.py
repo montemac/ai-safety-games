@@ -1,7 +1,11 @@
 # %%
 # Imports, etc
+import os
 from typing import Dict, List, Any
 import pickle
+
+# TEMP
+# os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
 import numpy as np
 import pandas as pd
@@ -27,6 +31,8 @@ SEQUENCE_MODE = "tokens_score"
 
 INCLUDED_PLAYERS = [0, 3]
 
+INCLUDE_HAND_END = True
+
 
 def game_filter(summary_lists: Dict[str, List[Any]]) -> List[int]:
     """Filter out games that don't match criteria"""
@@ -42,11 +48,12 @@ game_data = cheat_utils.load_game_data(
     sequence_mode=SEQUENCE_MODE,
     game_filter=game_filter,
     device=DEVICE,
+    include_hand_end=INCLUDE_HAND_END,
 )
 
 # %%
 # Train models!
-ARCH_PARAMS = [(32, 32), (16, 8), (12, 12)]
+ARCH_PARAMS = [(32, 32)]
 
 for d_model, d_head in tqdm(ARCH_PARAMS):
     # Train using new high-level function
@@ -62,7 +69,8 @@ for d_model, d_head in tqdm(ARCH_PARAMS):
             d_model=d_model,
             d_head=d_head,
             attn_only=True,
-            n_ctx=199,  # TODO: don't make this a constant!
+            max_turns=40,
+            include_hand_end=INCLUDE_HAND_END,
             epochs=500,
             # epochs=int(10 * 125000 / len(game_data.loaded_game_inds)),
             batch_size=1000,

@@ -595,7 +595,7 @@ class CheatGame:
             ),
         )
 
-    def get_token_vocab(self) -> Dict[str, int]:
+    def get_token_vocab(self, include_hand_end=False) -> Dict[str, int]:
         """Build a token vocabulary based on this game's
         configuration."""
         token_strs = []
@@ -636,6 +636,8 @@ class CheatGame:
             ]
         )
         # Special tokens (padding, beginning, end of game)
+        if include_hand_end:
+            token_strs.append("EOH")
         token_strs.extend(["SCORE", "PAD", "BOG", "EOG"])
         # Enumerate and return
         vocab = {token_str: idx for idx, token_str in enumerate(token_strs)}
@@ -779,6 +781,7 @@ def get_seqs_from_state_history(
     vocab: Dict[str, int],
     state_history: List[CheatState],
     players_to_return: Optional[List[int]] = None,
+    include_hand_end: bool = False,
 ) -> Int64[t.Tensor, "batch pos"]:
     """Function to represent a game state history as a batch of token
     sequences, one sequence per game player.
@@ -824,6 +827,8 @@ def get_seqs_from_state_history(
     # Iterate over the state history one for each player, with that
     # player as the "active player"
     tokens_all = []
+    first_action_pos = None
+    action_pos_step = None
     for player in players_to_return:
         # Initialize the tokens with two padding token for each player
         # that won't get a turn before the first turn of the player of
@@ -848,7 +853,13 @@ def get_seqs_from_state_history(
                         for card in state.hands[state.current_player]
                     )
                     tokens.append(f"hand_{num_cards}x{rank}")
+                if include_hand_end:
+                    tokens.append("EOH")
                 # Action
+                if first_action_pos is None:
+                    first_action_pos = len(tokens)
+                elif action_pos_step is None:
+                    action_pos_step = len(tokens) - first_action_pos
                 tokens.append(
                     f"a_{game.action_meanings[post_state['action']]}"
                 )
@@ -885,7 +896,7 @@ def get_seqs_from_state_history(
         tokens.append("EOG")
         token_ids = t.tensor([vocab[token] for token in tokens], dtype=t.int64)
         tokens_all.append(token_ids[None, :])
-    return t.cat(tokens_all, dim=0)
+    return t.cat(tokens_all, dim=0), first_action_pos, action_pos_step
 
 
 class CheatPlayer:

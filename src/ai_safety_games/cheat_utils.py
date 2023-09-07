@@ -41,6 +41,8 @@ class CheatGameData:
     loaded_game_inds: np.array
     game_config: cheat.CheatConfig
     players: List[cheat.CheatPlayer]
+    first_action_pos: int
+    action_pos_step: int
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -57,7 +59,8 @@ class CheatTrainingConfig:
     d_model: int
     d_head: int
     attn_only: bool
-    n_ctx: int
+    max_turns: int
+    include_hand_end: bool = False
     epochs: int
     batch_size: int
     lr: float
@@ -79,6 +82,7 @@ def load_game_data(
     device: str,
     sequence_mode: str,
     game_filter: Optional[Callable[Dict[str, List[Any]], List[int]]] = None,
+    include_hand_end: bool = False,
 ) -> TokenizedGames:
     """Load game data from disk, and optinoally filter."""
     # Load dataset config info
@@ -120,15 +124,10 @@ def load_game_data(
     ]
 
     # Get the token vocab
-    vocab, player_action_vocab = game.get_token_vocab()
-    vocab_strs = {idx: tok for tok, idx in vocab.items()}
-
-    # Positions corresponding to actions
-    # TODO: save this in results for later use
-    first_action_pos = (
-        (game_config.num_players - 1) * 2 + 2 + game.config.num_ranks
+    vocab, player_action_vocab = game.get_token_vocab(
+        include_hand_end=include_hand_end
     )
-    action_pos_step = game_config.num_players * 2 + game.config.num_ranks
+    vocab_strs = {idx: tok for tok, idx in vocab.items()}
 
     # Sequence creation options
     # TODO: use turns_mode
@@ -158,8 +157,15 @@ def load_game_data(
                 scores = np.zeros(game_config.num_players)
                 scores[hand_sizes.argmin()] = 1
             # Get token sequences
-            tokens_this = cheat.get_seqs_from_state_history(
-                game=game, vocab=vocab, state_history=state_history
+            (
+                tokens_this,
+                first_action_pos,
+                action_pos_step,
+            ) = cheat.get_seqs_from_state_history(
+                game=game,
+                vocab=vocab,
+                state_history=state_history,
+                include_hand_end=include_hand_end,
             )
             tokens_list.extend([row for row in tokens_this])
             scores_list.append(scores)
@@ -194,6 +200,8 @@ def load_game_data(
         loaded_game_inds=np.array(game_inds),
         game_config=game_config,
         players=players_all,
+        first_action_pos=first_action_pos,
+        action_pos_step=action_pos_step,
     )
 
     return return_data
@@ -207,21 +215,23 @@ def train(config: CheatTrainingConfig):
             dataset_folder=config.dataset_folder,
             device=config.device,
             game_filter=config.game_filter,
+            include_hand_end=config.include_hand_end,
         )
     else:
         game_data = config.cached_game_data
 
     # Get the token vocab
     game = cheat.CheatGame(game_data.game_config)
-    vocab, player_action_vocab = game.get_token_vocab()
+    vocab, player_action_vocab = game.get_token_vocab(
+        include_hand_end=config.include_hand_end
+    )
     token_props, action_props = cheat.get_token_props(vocab=vocab)
 
-    # Positions corresponding to actions
-    first_action_pos = (
-        (game_data.game_config.num_players - 1) * 2 + 2 + game.config.num_ranks
-    )
-    action_pos_step = (
-        game_data.game_config.num_players * 2 + game.config.num_ranks
+    # Context length based on max turns
+    n_ctx = (
+        int(np.ceil(config.max_turns / game_data.game_config.num_players))
+        * game_data.action_pos_step
+        + 3
     )
 
     # Filter out any players if provided
@@ -257,11 +267,12 @@ def train(config: CheatTrainingConfig):
             act_fn="relu",
             device=config.device,
             seed=config.seed,
-            n_ctx=config.n_ctx,
+            n_ctx=n_ctx,
             attn_only=config.attn_only,
         ),
         st_cfg=ScoreTransformerConfig(
-            first_action_pos=first_action_pos, action_pos_step=action_pos_step
+            first_action_pos=game_data.first_action_pos,
+            action_pos_step=game_data.action_pos_step,
         ),
     )
 
@@ -273,7 +284,8 @@ def train(config: CheatTrainingConfig):
                 game_data.game_data.scores[test_inds],
             ],
             output=game_data.game_data.tokens[
-                test_inds, first_action_pos::action_pos_step
+                test_inds,
+                game_data.first_action_pos :: game_data.action_pos_step,
             ]
             .detach()
             .clone(),
@@ -390,7 +402,8 @@ def train(config: CheatTrainingConfig):
                 game_data.game_data.scores[train_inds],
             ],
             output=game_data.game_data.tokens[
-                train_inds, first_action_pos::action_pos_step
+                train_inds,
+                game_data.first_action_pos :: game_data.action_pos_step,
             ]
             .detach()
             .clone(),

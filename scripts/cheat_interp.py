@@ -13,6 +13,9 @@ import os
 import numpy as np
 import pandas as pd
 import torch as t
+import sklearn
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 from tqdm.auto import tqdm
 import plotly.express as px
 from einops import rearrange, einsum
@@ -47,7 +50,7 @@ _ = t.set_grad_enabled(False)
 # Small model, trained only on naive and 0.25/1.0 adaptive
 # TRAINING_RESULTS_FN = "cheat_train_results/20230817T151856/results.pkl"
 # Very small model, 1 head!
-TRAINING_RESULTS_FN = "cheat_train_results/20230830T002809/results.pkl"
+TRAINING_RESULTS_FN = "cheat_train_results/20230831T023701/results.pkl"
 
 
 # Load model
@@ -230,7 +233,7 @@ top_src_pos_df["src_pos_turn"] = (
     top_src_pos_df.src_pos - first_action_pos
 ) // action_pos_step + 1
 
-NUM_ACTIONS_PLOT = 3
+NUM_ACTIONS_PLOT = 5
 for head in range(QK_pos_tri.shape[0]):
     last_action_pos = (
         first_action_pos + (NUM_ACTIONS_PLOT - 1) * action_pos_step
@@ -452,6 +455,50 @@ plot_attn_and_ov(
 #     ]
 # ).T
 # top_k_tokens
+
+# %%
+# Explore the embeddings a bit
+
+# First, PCA the positional embedding weights to get to a reasonable
+# number of dimensions
+pca_pos = PCA(n_components=15)
+W_pos_pca = pca_pos.fit_transform(model.pos_embed_copy.W_pos.cpu().numpy())
+print(pca_pos.explained_variance_ratio_)
+
+# Now try t-SNE
+W_pos_tsne = TSNE(n_components=2, random_state=3).fit_transform(W_pos_pca)
+W_pos_tsne_df = pd.DataFrame(W_pos_tsne, columns=["tsne_0", "tsne_1"])
+W_pos_tsne_df["pos_cycle_idx"] = [
+    idx % len(POS_CYCLE) for idx in range(W_pos_pca.shape[0])
+]
+W_pos_tsne_df["pos_cycle_name"] = POS_CYCLE[W_pos_tsne_df.pos_cycle_idx]
+W_pos_tsne_df["turn"] = W_pos_tsne_df.index // len(POS_CYCLE)
+W_pos_tsne_df["pos_cycle_compr_name"] = W_pos_tsne_df["pos_cycle_name"].apply(
+    lambda nm: "hand" if nm.startswith("hand") else nm
+)
+
+px.scatter(
+    W_pos_tsne_df,
+    x="tsne_0",
+    y="tsne_1",
+    color=W_pos_tsne_df["turn"].astype(str),
+    hover_data=["pos_cycle_name"],
+).show()
+
+px.scatter(
+    W_pos_tsne_df,
+    x="tsne_0",
+    y="tsne_1",
+    color="pos_cycle_compr_name",
+    hover_data=["turn"],
+).show()
+
+# %%
+# What about embedding cosine sims?
+csim_pos_tokens = sklearn.metrics.pairwise.cosine_similarity(
+    model.pos_embed_copy.W_pos.cpu().numpy(),
+    model.token_embed.W_E.cpu().numpy(),
+)
 
 
 # %%
