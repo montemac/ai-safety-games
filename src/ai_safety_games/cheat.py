@@ -1034,12 +1034,12 @@ class ScoreTransformerCheatPlayer(CheatPlayer):
         """Build the tokens tensor from scratch, which is simple but
         inefficient. TODO: build the sequence turn-by-turn, only
         incorporating the new information at each call to step."""
-        tokens, _, _ = get_seqs_from_state_history(
+        tokens = get_seqs_from_state_history(
             game=game,
             vocab=self.vocab,
             state_history=game.state_history,
             players_to_return=[game.state.current_player],
-        ).to(self.model.cfg.device)
+        )[0].to(self.model.cfg.device)
         with t.no_grad():
             action_logits = self.model(
                 tokens=tokens,

@@ -61,6 +61,8 @@ game_filter = None
 
 with open(TRAINING_RESULTS_FN, "rb") as file:
     results_all = pickle.load(file)
+del results_all["config"]["n_ctx"]
+results_all["config"]["max_turns"] = 40  # TODO: don't hard code this
 config = cheat_utils.CheatTrainingConfig(**results_all["config"])
 results = training.TrainingResults(**results_all["training_results"])
 model = results.model
