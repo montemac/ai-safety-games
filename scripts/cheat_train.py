@@ -186,7 +186,11 @@ RUNS = [
     "20230831T023701",
     "20230831T072206",
     "20230831T113929",
+    "20230907T160608",
 ]
+
+game_filter = None
+
 results_list = []
 model_descs = []
 for run in RUNS:

@@ -1039,6 +1039,7 @@ class ScoreTransformerCheatPlayer(CheatPlayer):
             vocab=self.vocab,
             state_history=game.state_history,
             players_to_return=[game.state.current_player],
+            include_hand_end=("EOH" in self.vocab),
         )[0].to(self.model.cfg.device)
         with t.no_grad():
             action_logits = self.model(

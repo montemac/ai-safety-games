@@ -50,7 +50,9 @@ _ = t.set_grad_enabled(False)
 # Small model, trained only on naive and 0.25/1.0 adaptive
 # TRAINING_RESULTS_FN = "cheat_train_results/20230817T151856/results.pkl"
 # Very small model, 1 head!
-TRAINING_RESULTS_FN = "cheat_train_results/20230831T023701/results.pkl"
+# TRAINING_RESULTS_FN = "cheat_train_results/20230831T023701/results.pkl"
+# 1 head, 32x32, with EOH
+TRAINING_RESULTS_FN = "cheat_train_results/20230907T160608/results.pkl"
 
 
 # Load model
@@ -61,7 +63,8 @@ game_filter = None
 
 with open(TRAINING_RESULTS_FN, "rb") as file:
     results_all = pickle.load(file)
-del results_all["config"]["n_ctx"]
+if "n_ctx" in results_all["config"]:
+    del results_all["config"]["n_ctx"]
 results_all["config"]["max_turns"] = 40  # Wasn't stored in older models
 config = cheat_utils.CheatTrainingConfig(**results_all["config"])
 results = training.TrainingResults(**results_all["training_results"])
@@ -77,7 +80,9 @@ game_config, players_all = cheat_utils.load_config_and_players_from_dataset(
 )
 
 game = cheat.CheatGame(config=game_config)
-vocab, action_vocab = game.get_token_vocab()
+vocab, action_vocab = game.get_token_vocab(
+    include_hand_end=config.include_hand_end
+)
 vocab_str = {idx: token_str for token_str, idx in vocab.items()}
 
 # Token properties table
@@ -194,6 +199,7 @@ tokens, first_action_pos, action_pos_step = cheat.get_seqs_from_state_history(
     vocab=vocab,
     state_history=game.state_history,
     players_to_return=[0],
+    include_hand_end=config.include_hand_end,
 )
 
 # Get logits
@@ -367,6 +373,9 @@ POS_CYCLE = np.array(
         "hand_7",
     ]
 )
+
+if config.include_hand_end:
+    POS_CYCLE = np.append(POS_CYCLE, "EOH")
 
 # For each head, iterate through destination positions relevant to
 # action predictions, and show the top-K source positions, sorted by their
@@ -552,7 +561,8 @@ TOKENS_BY_POS_CYCLE = {
     ].index.to_list(),
 }
 
-assert "EOH" not in vocab, "Need to update if using EOH token"
+if config.include_hand_end:
+    TOKENS_BY_POS_CYCLE["EOH"] = ["EOH"]
 
 src_pos_token_list = []
 dst_pos_token_list = []
@@ -598,6 +608,23 @@ OV_comb = einsum(
     W_e_comb_src,
     "dmo da, h dmo dmv, ptv dmv -> h da ptv",
 )
+
+# TODO: what's going on with this plot?  Why do we want to attend so
+# hard to a successful call on behalf of the previous player?  Ah,
+# perhaps because whether or not the call was successful significantly
+# influences the legal next actions on our part? Still, the associated
+# action-values don't make that much sense yet... maybe look for some
+# example games where we see a pattern like this?  The action logits are
+# all high for calling actions, which seems strange after a successful
+# call?  Is it likely that the opponent is cheating on this initial
+# play?  Maybe I didn't program it to always play when the deck is
+# empty? No, I don't think so... if the adaptive cheater can play, it
+# won't cheat.  I really have no idea why the call actions are so
+# emphasized by the output-value pattern here.  Maybe it's a necessary
+# side effect of some other more important feature given the limited
+# computation available to the model?
+
+px.scatter(QK_comb[0, 0, :204].cpu()).show()
 
 
 # ---------------------------------------------------------------------------
