@@ -118,6 +118,9 @@ class ScoreTransformer(HookedTransformer):
         self.token_embed = self.embed
         self.pos_embed_copy = self.pos_embed
         self.embed = nn.Identity().to(self.first_device)
+        # TODO: fix this: pos_embed should output zero, otherwise we're
+        # passing the pre-calculated embeddings though twice and we end
+        # up with a 2x factor that we need to track, which is annoying!!
         self.pos_embed = IdentityVar().to(self.first_device)
         self.unembed = ActionUnembed(
             d_action=cfg.d_vocab_out,

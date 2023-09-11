@@ -22,7 +22,7 @@ from einops import rearrange, einsum
 import xarray as xr
 
 from ai_safety_games import cheat, utils, training, cheat_utils
-from ai_safety_games.ScoreTransformer import ScoreTransformer
+from ai_safety_games.ScoreTransformer import ScoreTransformer, IdentityVar
 
 utils.enable_ipython_reload()
 
@@ -507,6 +507,37 @@ csim_pos_tokens = sklearn.metrics.pairwise.cosine_similarity(
 
 
 # %%
+# Load some example game data
+NUM_GAMES = 1000
+
+
+def game_filter(summary_lists):
+    """Filter out games that don't match criteria"""
+    inds = []
+    for idx, player_inds in enumerate(summary_lists["player_indices"]):
+        if (
+            all(
+                [
+                    player_ind in config.test_player_inds
+                    for player_ind in player_inds
+                ]
+            )
+            and len(inds) < NUM_GAMES
+        ):
+            inds.append(idx)
+    return inds
+
+
+game_data = cheat_utils.load_game_data(
+    dataset_folder=config.dataset_folder,
+    sequence_mode=config.sequence_mode,
+    game_filter=game_filter,
+    device=model.cfg.device,
+    include_hand_end=config.include_hand_end,
+)
+
+
+# %%
 # Calculate the equivalent QK and OV matrices based on the combined
 # token and position embeddings, of which only certain combinations are
 # possible.
@@ -588,24 +619,68 @@ pos_embed_score[(POS_CYCLE == "result / SCORE").nonzero()[0][0], :] += (
 )
 
 
+def apply_layernorm(x):
+    """Center and scale the last dimension of the input tensor."""
+    x = x - x.mean(axis=-1, keepdim=True)
+    scale = (x.pow(2).mean(-1, keepdim=True) + 1e-5).sqrt()
+    x = x / scale
+    return x
+
+
 # Calculate the combined embeddings of each possible source and
 # destination token/pos, including a residual stream element that is
 # always one to allow folding of the biases into the weights
-def get_combined_embeds(pos, tok, pos_embed, token_embed):
+def get_combined_embeds(
+    pos, tok, pos_embed, token_embed, qkv_mode, double_embeds
+):
+    """Get the combined embeddings of the provided positions and tokens,
+    including a residual stream element that is always one to allow
+    folding of the biases into the weights. Optionally apply centering
+    and scaling to simulate layernorm, and add dimension of 1s for bias
+    folding. Both of these happen in "QKV mode".
+    """
+    embed = pos_embed[pos, :] + token_embed[tok, :]
+    if double_embeds:
+        embed *= 2
+    if not qkv_mode:
+        return embed
+    # Center/scale
+    embed = apply_layernorm(embed)
+    # Add 1s dimension for bias folding
     return t.cat(
         [
-            (pos_embed[pos, :] + token_embed[tok, :]),
+            embed,
             t.ones(len(pos)).to(pos_embed.device)[:, None],
         ],
         dim=1,
     )
 
 
-W_e_comb_src = get_combined_embeds(
-    src_pos, src_tok, pos_embed_score, model.token_embed.W_E
+do_double_embeds = isinstance(model.pos_embed, IdentityVar)
+
+embed_comb_qkv_src = get_combined_embeds(
+    src_pos,
+    src_tok,
+    pos_embed_score,
+    model.token_embed.W_E,
+    qkv_mode=True,
+    double_embeds=do_double_embeds,
 )
-W_e_comb_dst = get_combined_embeds(
-    dst_pos, dst_tok, pos_embed_score, model.token_embed.W_E
+embed_comb_qkv_dst = get_combined_embeds(
+    dst_pos,
+    dst_tok,
+    pos_embed_score,
+    model.token_embed.W_E,
+    qkv_mode=True,
+    double_embeds=do_double_embeds,
+)
+embed_comb_resid = get_combined_embeds(
+    src_pos,
+    src_tok,
+    pos_embed_score,
+    model.token_embed.W_E,
+    qkv_mode=False,
+    double_embeds=do_double_embeds,
 )
 
 # Calculate the QK weight matrix with biases folded in
@@ -619,12 +694,16 @@ W_QKb = einsum(
     "h dmq dh, h dmk dh -> h dmq dmk",
 )
 
-# Calculate the combined QK matrix
-QK_comb = einsum(
-    W_e_comb_dst,
-    W_QKb,
-    W_e_comb_src,
-    "ptq dmq, h dmq dmk, ptk dmk -> h ptq ptk",
+# Calculate the combined QK matrix, including the effect of the
+# attention scaling before the softmax
+QK_comb = (
+    einsum(
+        embed_comb_qkv_dst,
+        W_QKb,
+        embed_comb_qkv_src,
+        "ptq dmq, h dmq dmk, ptk dmk -> h ptq ptk",
+    )
+    / model.blocks[0].attn.attn_scale
 )
 # Enforce causality
 QK_comb = t.where(
@@ -633,8 +712,7 @@ QK_comb = t.where(
     t.tensor(-np.inf).to(model.cfg.device),
 )
 
-# Calculate the OV weight matrix with biases folded in
-# TODO: map out how output biases should be folded in
+# Calculate the OV weight matrix with value biases folded in
 W_OVb = einsum(
     model.blocks[0].attn.W_O,
     t.cat(
@@ -643,38 +721,102 @@ W_OVb = einsum(
     "h dh dmo, h dmv dh -> h dmo dmv",
 )
 
-# Calculate the combined OV matrix
+# # Calculate the combined OV matrix
+# # Actually, don't use this, as it ignores layernorm which I don't want todo
+# OV_comb = einsum(
+#     model.unembed.W_U,
+#     W_OVb,
+#     embed_comb_qkv_src,
+#     "dmo da, h dmo dmv, ptv dmv -> h da ptv",
+# )
+# # Calculate the combined action biases
+# # Actually, don't use these, they ignore layernorm
+# action_biases = (
+#     einsum(model.unembed.W_U, model.blocks[0].attn.b_O, "dmo da, dmo -> da")
+#     + model.unembed.b_U
+# )
+
+# OV without unembed
 OV_comb = einsum(
-    model.unembed.W_U,
     W_OVb,
-    W_e_comb_src,
-    "dmo da, h dmo dmv, ptv dmv -> h da ptv",
+    embed_comb_qkv_src,
+    "h dmo dmv, ptv dmv -> h dmo ptv",
 )
 
-# TODO: what's going on with this plot?  Why do we want to attend so
-# hard to a successful call on behalf of the previous player?  Ah,
-# perhaps because whether or not the call was successful significantly
-# influences the legal next actions on our part? Still, the associated
-# action-values don't make that much sense yet... maybe look for some
-# example games where we see a pattern like this?  The action logits are
-# all high for calling actions, which seems strange after a successful
-# call?  Is it likely that the opponent is cheating on this initial
-# play?  Maybe I didn't program it to always play when the deck is
-# empty? No, I don't think so... if the adaptive cheater can play, it
-# won't cheat.  I really have no idea why the call actions are so
-# emphasized by the output-value pattern here.  Maybe it's a necessary
-# side effect of some other more important feature given the limited
-# computation available to the model?
+# Mapping from position and token to index in the combined embedding
+pos_tok_to_src_embed_ind = {
+    (pos, tok): idx for idx, (pos, tok) in enumerate(src_pos_token_list)
+}
+pos_tok_to_dst_embed_ind = {
+    (pos, tok): idx for idx, (pos, tok) in enumerate(dst_pos_token_list)
+}
 
-max_ind = 204
-px.scatter(
-    QK_comb[0, 0, :max_ind].cpu(),
-    hover_data={
-        "token": [vocab_str[tok.item()] for tok in src_tok[:max_ind].cpu()],
-        "pos": src_pos[:max_ind].cpu(),
-    },
-).show()
 
+def get_embed_inds(positions, tokens, pos_tok_to_ind):
+    """Get the combined embedding indices for the provided positions and
+    tokens."""
+    return (
+        t.tensor(
+            [
+                pos_tok_to_ind[(pos.item(), tok.item())]
+                for pos, tok in zip(positions.flatten(), tokens.flatten())
+            ]
+        )
+        .to(model.cfg.device)
+        .reshape(positions.shape)
+    )
+
+
+def get_resid_final(positions, tokens, embed, QK, OV, b_O):
+    """Calculate the final resid stream value for a given set of tokens
+    and positions. The destination is assumed to be the final token/pos.
+    Layernorm and unembed are not applied."""
+    # Embedding indices
+    embed_inds = get_embed_inds(positions, tokens, pos_tok_to_src_embed_ind)
+    dst_ind = get_embed_inds(
+        positions[:, -1], tokens[:, -1], pos_tok_to_dst_embed_ind
+    )
+    # Select specific chuncks of the QK, OV and embed tensors given
+    # these specific embedding indices
+    QK_this = rearrange(QK[:, dst_ind, embed_inds], "h b ptv -> b h ptv")
+    OV_this = rearrange(OV[:, :, embed_inds], "h dmo b ptv -> b h ptv dmo")
+    embed_this = embed[embed_inds, :]
+    # Attention matrix
+    A = t.softmax(QK_this, dim=-1)
+    # Final resid stream value
+    attn_out = (
+        einsum(A, OV_this, "b h pts, b h pts dmo -> b dmo") + b_O[None, :]
+    )
+    resid_final = embed_this[:, -1, :] + attn_out
+    return resid_final
+
+
+# Test the resid final calculation
+logits, cache = model.run_with_cache(
+    tokens=game_data.game_data.tokens[[0], :first_action_pos],
+    scores=t.tensor([INTERP_GOAL_SCORE]).to(model.cfg.device),
+)
+
+resid_final = get_resid_final(
+    positions=t.arange(0, first_action_pos).to(model.cfg.device)[None, :],
+    tokens=game_data.game_data.tokens[[0], :first_action_pos],
+    embed=embed_comb_resid,
+    QK=QK_comb,
+    OV=OV_comb,
+    b_O=model.blocks[0].attn.b_O,
+)
+
+print(
+    t.allclose(
+        resid_final, cache["blocks.0.hook_resid_post"][:, -1, :], atol=1e-4
+    )
+)
+
+# TODO: add layernorm and unembed to the above, then think about the
+# best way to visualize each token's contribution to the final output
+# action logits, then what those final logits actually are.  Probably
+# just the attention-weighted OV values are reasonable, then showing the
+# final including layernorm, bias and log-softmax as well?
 
 # ---------------------------------------------------------------------------
 
