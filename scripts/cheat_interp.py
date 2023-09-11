@@ -511,6 +511,9 @@ csim_pos_tokens = sklearn.metrics.pairwise.cosine_similarity(
 # token and position embeddings, of which only certain combinations are
 # possible.
 
+# Goal score as a baseline for interpreting the model
+INTERP_GOAL_SCORE = 5
+
 # Iterate over positions, and for each position, iterate over the
 # possible tokens at that position, storing each possible (pos, token)
 # tuple
@@ -578,19 +581,48 @@ for pos in range(model.pos_embed_copy.W_pos.shape[0]):
 src_pos, src_tok = t.tensor(src_pos_token_list).T.to(model.cfg.device)
 dst_pos, dst_tok = t.tensor(dst_pos_token_list).T.to(model.cfg.device)
 
-# Calculate the combined embeddings of each possible source and
-# destination token/pos
-W_e_comb_src = (
-    model.pos_embed_copy.W_pos[src_pos, :] + model.token_embed.W_E[src_tok, :]
+# Add the goal score embed to the position embedding
+pos_embed_score = model.pos_embed_copy.W_pos.clone()
+pos_embed_score[(POS_CYCLE == "result / SCORE").nonzero()[0][0], :] += (
+    model.score_embed.b_S + model.score_embed.W_S * INTERP_GOAL_SCORE
 )
-W_e_comb_dst = (
-    model.pos_embed_copy.W_pos[dst_pos, :] + model.token_embed.W_E[dst_tok, :]
+
+
+# Calculate the combined embeddings of each possible source and
+# destination token/pos, including a residual stream element that is
+# always one to allow folding of the biases into the weights
+def get_combined_embeds(pos, tok, pos_embed, token_embed):
+    return t.cat(
+        [
+            (pos_embed[pos, :] + token_embed[tok, :]),
+            t.ones(len(pos)).to(pos_embed.device)[:, None],
+        ],
+        dim=1,
+    )
+
+
+W_e_comb_src = get_combined_embeds(
+    src_pos, src_tok, pos_embed_score, model.token_embed.W_E
+)
+W_e_comb_dst = get_combined_embeds(
+    dst_pos, dst_tok, pos_embed_score, model.token_embed.W_E
+)
+
+# Calculate the QK weight matrix with biases folded in
+W_QKb = einsum(
+    t.cat(
+        [model.blocks[0].attn.W_Q, model.blocks[0].attn.b_Q[:, None, :]], dim=1
+    ),
+    t.cat(
+        [model.blocks[0].attn.W_K, model.blocks[0].attn.b_K[:, None, :]], dim=1
+    ),
+    "h dmq dh, h dmk dh -> h dmq dmk",
 )
 
 # Calculate the combined QK matrix
 QK_comb = einsum(
     W_e_comb_dst,
-    W_QK,
+    W_QKb,
     W_e_comb_src,
     "ptq dmq, h dmq dmk, ptk dmk -> h ptq ptk",
 )
@@ -601,10 +633,20 @@ QK_comb = t.where(
     t.tensor(-np.inf).to(model.cfg.device),
 )
 
+# Calculate the OV weight matrix with biases folded in
+# TODO: map out how output biases should be folded in
+W_OVb = einsum(
+    model.blocks[0].attn.W_O,
+    t.cat(
+        [model.blocks[0].attn.W_V, model.blocks[0].attn.b_V[:, None, :]], dim=1
+    ),
+    "h dh dmo, h dmv dh -> h dmo dmv",
+)
+
 # Calculate the combined OV matrix
 OV_comb = einsum(
     model.unembed.W_U,
-    W_OV,
+    W_OVb,
     W_e_comb_src,
     "dmo da, h dmo dmv, ptv dmv -> h da ptv",
 )
@@ -624,7 +666,14 @@ OV_comb = einsum(
 # side effect of some other more important feature given the limited
 # computation available to the model?
 
-px.scatter(QK_comb[0, 0, :204].cpu()).show()
+max_ind = 204
+px.scatter(
+    QK_comb[0, 0, :max_ind].cpu(),
+    hover_data={
+        "token": [vocab_str[tok.item()] for tok in src_tok[:max_ind].cpu()],
+        "pos": src_pos[:max_ind].cpu(),
+    },
+).show()
 
 
 # ---------------------------------------------------------------------------
