@@ -18,7 +18,7 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from tqdm.auto import tqdm
 import plotly.express as px
-from einops import rearrange, einsum
+from einops import rearrange, einsum, repeat
 import xarray as xr
 
 from ai_safety_games import cheat, utils, training, cheat_utils
@@ -711,6 +711,9 @@ QK_comb = t.where(
     QK_comb,
     t.tensor(-np.inf).to(model.cfg.device),
 )
+# Exponentiate to capture the first part of the softmax attention
+# operation
+QK_comb_exp = t.exp(QK_comb)
 
 # Calculate the OV weight matrix with value biases folded in
 W_OVb = einsum(
@@ -767,52 +770,172 @@ def get_embed_inds(positions, tokens, pos_tok_to_ind):
     )
 
 
-def get_resid_final(positions, tokens, embed, QK, OV, b_O):
-    """Calculate the final resid stream value for a given set of tokens
+def get_model_values(positions, tokens, embed, QK, OV, b_O, W_U, b_U):
+    """Calculate the action logits and other stuff for a given set of tokens
     and positions. The destination is assumed to be the final token/pos.
-    Layernorm and unembed are not applied."""
+    Layernorm and unembed are applied to the final residual stream value."""
     # Embedding indices
     embed_inds = get_embed_inds(positions, tokens, pos_tok_to_src_embed_ind)
     dst_ind = get_embed_inds(
-        positions[:, -1], tokens[:, -1], pos_tok_to_dst_embed_ind
+        positions[:, [-1]], tokens[:, [-1]], pos_tok_to_dst_embed_ind
     )
     # Select specific chuncks of the QK, OV and embed tensors given
     # these specific embedding indices
     QK_this = rearrange(QK[:, dst_ind, embed_inds], "h b ptv -> b h ptv")
     OV_this = rearrange(OV[:, :, embed_inds], "h dmo b ptv -> b h ptv dmo")
     embed_this = embed[embed_inds, :]
-    # Attention matrix
-    A = t.softmax(QK_this, dim=-1)
-    # Final resid stream value
+    # Attention pattern matrix
+    # pattern = t.softmax(QK_this, dim=-1)
+    pattern = QK_this / QK_this.sum(dim=-1, keepdim=True)
+    # Attention output
     attn_out = (
-        einsum(A, OV_this, "b h pts, b h pts dmo -> b dmo") + b_O[None, :]
+        einsum(pattern, OV_this, "b h pts, b h pts dmo -> b dmo")
+        + b_O[None, :]
     )
+    # Final residual stream value
     resid_final = embed_this[:, -1, :] + attn_out
-    return resid_final
+    # LayerNorm
+    resid_final = apply_layernorm(resid_final)
+    # Unembed
+    logits = (
+        einsum(
+            W_U,
+            resid_final,
+            "dmo da, b dmo -> b da",
+        )
+        + b_U
+    )
+    return {
+        "embed_inds": embed_inds,
+        "embed": embed_this,
+        "attn_scores_exp": QK_this,
+        "OV_this": OV_this,
+        "pattern": pattern,
+        "attn_out": attn_out,
+        "resid_final": resid_final,
+        "logits": logits,
+    }
 
 
 # Test the resid final calculation
+model_vals = get_model_values(
+    positions=repeat(
+        t.arange(0, first_action_pos).to(model.cfg.device), "p -> b p", b=3
+    ),
+    tokens=game_data.game_data.tokens[:3, :first_action_pos],
+    embed=embed_comb_resid,
+    QK=QK_comb_exp,
+    OV=OV_comb,
+    b_O=model.blocks[0].attn.b_O,
+    W_U=model.unembed.W_U,
+    b_U=model.unembed.b_U,
+)
+
 logits, cache = model.run_with_cache(
-    tokens=game_data.game_data.tokens[[0], :first_action_pos],
+    tokens=game_data.game_data.tokens[:3, :first_action_pos],
     scores=t.tensor([INTERP_GOAL_SCORE]).to(model.cfg.device),
 )
 
-resid_final = get_resid_final(
-    positions=t.arange(0, first_action_pos).to(model.cfg.device)[None, :],
-    tokens=game_data.game_data.tokens[[0], :first_action_pos],
-    embed=embed_comb_resid,
-    QK=QK_comb,
-    OV=OV_comb,
-    b_O=model.blocks[0].attn.b_O,
-)
+print(t.allclose(model_vals["logits"], logits[:, 0, :], atol=1e-4))
 
-print(
-    t.allclose(
-        resid_final, cache["blocks.0.hook_resid_post"][:, -1, :], atol=1e-4
+# Show the exponentiated QK values for the first action
+action_ind = 0
+max_ind = (
+    (src_pos < (first_action_pos + action_ind * action_pos_step)).sum().item()
+)
+plot_df = pd.DataFrame(
+    {
+        "QK_exp": QK_comb_exp[0, action_ind, :].cpu().numpy(),
+        "token": np.array([vocab_str[tok.item()] for tok in src_tok.cpu()]),
+        "pos": src_pos.cpu().numpy(),
+    }
+).iloc[:max_ind]
+px.scatter(
+    plot_df,
+    x=plot_df.index,
+    y="QK_exp",
+    color=plot_df["pos"].astype(str),
+    hover_data=["token"],
+).show()
+
+
+# Function to get the logits for a given set of tokens, specifying
+# various arguments to the get_logits function
+def viz_sequence(token_strs):
+    """Wrapper around get_logits to visualize the model in various ways
+    given a sequence of tokens."""
+    # Convert the token strs to positions and tokens
+    positions = t.arange(len(token_strs)).to(model.cfg.device)[None, :]
+    tokens = t.tensor([vocab[token_str] for token_str in token_strs]).to(
+        model.cfg.device
+    )[None, :]
+    # Run the unwrapped model to get various specific quantities
+    model_vals = get_model_values(
+        positions=positions,
+        tokens=tokens,
+        embed=embed_comb_resid,
+        QK=QK_comb_exp,
+        OV=OV_comb,
+        b_O=model.blocks[0].attn.b_O,
+        W_U=model.unembed.W_U,
+        b_U=model.unembed.b_U,
     )
-)
+    # Plot the attention scores
+    plot_df = pd.DataFrame(
+        {
+            "attn_scores_exp": model_vals["attn_scores_exp"][0, 0, :]
+            .cpu()
+            .numpy(),
+            "pattern": model_vals["pattern"][0, 0, :].cpu().numpy(),
+            "token": np.array(token_strs),
+            "pos": np.arange(len(token_strs)),
+        }
+    )
+    px.scatter(
+        plot_df,
+        x=plot_df.index,
+        y="pattern",
+        hover_data=["token", "pos"],
+    ).show()
+    # Calculate the attention-weighted OV values
+    attn_OV = model_vals["pattern"][:, :, :, None] * model_vals["OV_this"]
+    # Center each OV value (equivalent to the final layernorm centering)
+    attn_OV_centered = attn_OV - attn_OV.mean(dim=-1, keepdim=True)
+    # Unembed each attention-weighted OV value
+    attn_OV_unembed = einsum(
+        model.unembed.W_U,
+        attn_OV_centered,
+        "dmo da, b h ptv dmo -> b h ptv da",
+    )
+    px.imshow(attn_OV_unembed.squeeze().cpu().numpy()).show()
+    # Final logits, softmaxed
+    px.scatter(t.softmax(model_vals["logits"].cpu().squeeze(), dim=-1)).show()
 
-# TODO: add layernorm and unembed to the above, then think about the
+    return model_vals
+
+
+# Construct some example inputs to demonstrate various scenarios
+# Start with a simple "can play" on first action
+token_strs = [
+    "BOG",
+    "SCORE",
+    "PAD",
+    "PAD",
+    "oa_1_c01",
+    "ar_1_normal",
+    "hand_0x0",
+    "hand_0x1",
+    "hand_1x2",
+    "hand_0x3",
+    "hand_0x4",
+    "hand_0x5",
+    "hand_0x6",
+    "hand_0x7",
+    "EOH",
+]
+model_vals = viz_sequence(token_strs)
+
+# TODO: Think about the
 # best way to visualize each token's contribution to the final output
 # action logits, then what those final logits actually are.  Probably
 # just the attention-weighted OV values are reasonable, then showing the
